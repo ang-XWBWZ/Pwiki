@@ -324,10 +324,14 @@ export class WikiEngine {
             { role: "user", content: prompt },
           ],
           response_format: { type: "json_object" },
+          thinking: { type: "disabled" },
           temperature: 0.1,
         }),
       });
       const data = await res.json() as any;
+      if (!res.ok) {
+        return { ok: false, msg: `API ${res.status}: ${JSON.stringify(data).slice(0, 300)}` };
+      }
       const raw = data?.choices?.[0]?.message?.content || "";
       const parsed = parseFileLLMResult(raw);
       if (!parsed) return { ok: false, msg: "Invalid JSON from LLM: " + raw.slice(0, 200) };

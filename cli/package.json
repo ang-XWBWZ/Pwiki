@@ -1,6 +1,6 @@
 {
   "name": "@llangtop/pwiki-cli",
-  "version": "1.0.7",
+  "version": "1.1.0",
   "description": "Wiki knowledge base CLI — terminal search and management",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,6 +1,6 @@
 {
   "name": "@llangtop/pwiki-core",
-  "version": "1.0.7",
+  "version": "1.1.0",
   "description": "Wiki knowledge base engine — keyword/semantic/hybrid search with local ONNX embeddings",
   "type": "module",
   "main": "./dist/index.js",
