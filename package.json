@@ -1,0 +1,19 @@
+{
+  "name": "pwiki",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Wiki knowledge base — core engine, MCP server, and CLI",
+  "workspaces": [
+    "core",
+    "mcp",
+    "cli"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "mcp": "npm run start -w @llangtop/pwiki-mcp",
+    "cli": "npm run start -w @llangtop/pwiki-cli"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.3"
+  }
+}
