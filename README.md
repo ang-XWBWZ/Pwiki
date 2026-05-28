@@ -7,6 +7,7 @@
 ```bash
 # ① 安装
 npm i -g @llangtop/pwiki-cli
+npm i -g @llangtop/pwiki-mcp
 ```
 
 ```bash
