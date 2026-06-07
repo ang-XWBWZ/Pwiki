@@ -118,6 +118,7 @@ export function addDocToIndex(entry: FileEntry, index: Bm25Index): void {
   const bodyTokens = tokenize(fullText);
   const titleTokens = tokenize(entry.title);
   const pathTokens = tokenize(pathPrefix(entry.relPath));
+  const tagTokens = entry.tags.length > 0 ? tokenize(entry.tags.join(" ")) : [];
 
   // 文档统计
   const doc: Bm25DocRecord = {
@@ -127,6 +128,7 @@ export function addDocToIndex(entry: FileEntry, index: Bm25Index): void {
       body: bodyTokens.length,
       title: titleTokens.length,
       path: pathTokens.length,
+      tags: tagTokens.length,
     },
   };
   index.docs[entry.relPath] = doc;
@@ -135,6 +137,7 @@ export function addDocToIndex(entry: FileEntry, index: Bm25Index): void {
   addFieldTerms("body", bodyTokens, entry.relPath, index);
   addFieldTerms("title", titleTokens, entry.relPath, index);
   addFieldTerms("path", pathTokens, entry.relPath, index);
+  if (tagTokens.length > 0) addFieldTerms("tags", tagTokens, entry.relPath, index);
 
   // 重新计算 N/avgdl
   const docs = Object.values(index.docs);

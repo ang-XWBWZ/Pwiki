@@ -1,6 +1,6 @@
-// store-vectors.ts �?vectors.json 持久化层
-// 管理: 语义向量 / chunk 元数�?/ 模型维度信息
-// 适配�?extensions/wiki/lib/store-vectors.ts �?wikiHome 改为 config.ts
+// store-vectors.ts — vectors.json 持久化层
+// 管理: 语义向量 / chunk 元数据 / 模型维度信息
+// 适配自 extensions/wiki/lib/store-vectors.ts — wikiHome 改为 config.ts
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { vectorFile } from "../config.js";

@@ -8,7 +8,7 @@
 import { getIndex, readBm25Stats } from "./store-index.js";
 import { getContent } from "./content-cache.js";
 import { tokenize } from "./tokenizer.js";
-import { bm25Score, getDocTokens } from "./bm25.js";
+import { bm25Score, getDocTokens, readBm25Index, searchBm25Index } from "./bm25.js";
 import type { Bm25Stats } from "./bm25.js";
 import { resolve } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
@@ -66,8 +66,28 @@ function getDocContent(entry: FileEntry): string | null {
  * BM25 关键词搜索
  */
 export function keywordSearch(query: string): SearchHit[] {
+  const index = readBm25Index();
+  if (index) return keywordSearchIndex(query, index);
   const stats = readBm25Stats();
   return stats ? keywordSearchBm25(query, stats) : keywordSearchLegacy(query);
+}
+
+/** 倒排索引模式搜索 */
+function keywordSearchIndex(query: string, index: import("./bm25.js").Bm25Index): SearchHit[] {
+  const idx = getIndex();
+  const raw = searchBm25Index(query, index, 200);
+  const queryTokens = tokenize(query);
+  return raw.map(r => {
+    const entry = idx[r.relPath];
+    if (!entry) return null;
+    let snippet = "";
+    const rawContent = getDocContent(entry);
+    if (rawContent) snippet = bm25Snippet(rawContent, queryTokens);
+    return {
+      relPath: r.relPath, sourceDir: entry.sourceDir,
+      title: entry.title, tags: entry.tags, snippet, score: r.score,
+    };
+  }).filter(Boolean) as SearchHit[];
 }
 
 /**
@@ -197,12 +217,20 @@ interface CandidateOptions {
  * 供 hybridCandidates 使用
  */
 export function keywordCandidates(query: string, opts: CandidateOptions = {}): SearchCandidate[] {
+  const index = readBm25Index();
+  if (index) {
+    const raw = searchBm25Index(query, index, opts.topK ?? 200);
+    return raw.map(r => ({
+      relPath: r.relPath, title: "", score: r.score, source: "keyword" as const,
+    }));
+  }
   const stats = readBm25Stats();
+  if (!stats) return [];
+
+  // fallback: 旧版 BM25 扫描
   const idx = getIndex();
   const queryTokens = tokenize(query);
   const candidates: SearchCandidate[] = [];
-
-  if (!stats) return [];
 
   for (const [relPath, entry] of Object.entries(idx)) {
     let score = 0;

@@ -13,7 +13,7 @@ import * as emb from "./lib/embedder.js";
 import * as cache from "./lib/content-cache.js";
 import { keywordSearch } from "./lib/search.js";
 import { semanticSearch, hybridSearch } from "./lib/semantic-search.js";
-import { buildBm25Stats } from "./lib/bm25.js";
+import { buildBm25Stats, buildBm25Index, writeBm25Index } from "./lib/bm25.js";
 import { writeBm25Stats } from "./lib/store-index.js";
 import { removeEntryFromAllStores } from "./lib/store-cleanup.js";
 import { scanDir } from "./lib/indexer-scan.js";
@@ -51,33 +51,13 @@ export class WikiEngine {
   removeSource(target: string): string | null {
     const removed = cfg.removeSource(target);
     if (removed) {
-      idx.removeEntriesBySource(removed);
-
-      // 清理语义向量（移除已卸载数据源的 embedding）
-      try {
-        const allIdx = idx.getIndex();
-        const embeddings = vec.getEmbeddings();
-        const chunkInfo = vec.getChunkInfo();
-        let changed = false;
-        for (const key of Object.keys(embeddings)) {
-          const relPath = key.replace(/###.*$/, "");
-          if (!allIdx[relPath]) {
-            delete embeddings[key];
-            delete chunkInfo[key];
-            changed = true;
-          }
+      // P0.5: 逐个调用 removeEntryFromAllStores 确保全部清理
+      const oldIdx = idx.getIndex();
+      for (const [relPath, entry] of Object.entries(oldIdx)) {
+        if (entry.sourceDir === removed) {
+          removeEntryFromAllStores(relPath);
         }
-        if (changed) {
-          vec.setEmbeddings(embeddings);
-          vec.setChunkInfo(chunkInfo);
-        }
-      } catch { /* ignore */ }
-
-      // 重建 BM25 统计
-      try {
-        const stats = buildBm25Stats();
-        writeBm25Stats(stats);
-      } catch { /* ignore */ }
+      }
     }
     return removed;
   }
@@ -98,14 +78,15 @@ export class WikiEngine {
       }
     }
 
-    // 重建 BM25 统计（每次 load/refresh 后）
+    // 重建 BM25（倒排索引优先，旧版兼容）
     try {
-      const stats = buildBm25Stats();
-      writeBm25Stats(stats);
+      const index = buildBm25Index();
+      writeBm25Index(index);
+      writeBm25Stats(buildBm25Stats());
     } catch { /* 统计失败不影响主流程 */ }
 
     if (cfg.getSemanticEnabled() && entries.length > 0) {
-      doGenerateEmbeddings(absPath, entries).catch(() => {});
+      await doGenerateEmbeddings(absPath, entries);
     }
     return entries.length;
   }
@@ -219,6 +200,10 @@ export class WikiEngine {
 
     // 同步 BM25（标题变更影响 token）
     this.rebuildAfterChange();
+    // 标题变更影响 embedding（embedText 含 heading 文本）
+    if (cfg.getSemanticEnabled()) {
+      doGenerateEmbeddings(entry.sourceDir, [entry]).catch(() => {});
+    }
     return true;
   }
 
@@ -274,6 +259,9 @@ export class WikiEngine {
   /** BM25 统计重建（CRUD 后同步） */
   private rebuildAfterChange(): void {
     try {
+      const index = buildBm25Index();
+      writeBm25Index(index);
+      // 同时写旧版 stats 保持兼容
       writeBm25Stats(buildBm25Stats());
     } catch { /* ignore */ }
   }
@@ -459,19 +447,28 @@ export class WikiEngine {
     const useModel = opts?.model || model;
 
     try {
+      // P2.12: 按 provider 能力组装参数，不硬编码 response_format/thinking
+      const body: Record<string, any> = {
+        model: useModel,
+        messages: [
+          { role: "system", content: FILE_LLM_SYSTEM_PROMPT },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.1,
+      };
+      // OpenAI-compatible providers 支持 json_object
+      if (!apiBase.includes("custom")) {
+        body.response_format = { type: "json_object" };
+      }
+      // DeepSeek 支持 thinking 参数
+      if (!apiBase.includes("openai.com")) {
+        body.thinking = { type: "disabled" };
+      }
+
       const res = await fetch(apiBase + "/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": "Bearer " + actualKey },
-        body: JSON.stringify({
-          model: useModel,
-          messages: [
-            { role: "system", content: FILE_LLM_SYSTEM_PROMPT },
-            { role: "user", content: prompt },
-          ],
-          response_format: { type: "json_object" },
-          thinking: { type: "disabled" },
-          temperature: 0.1,
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json() as any;
       if (!res.ok) {

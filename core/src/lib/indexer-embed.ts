@@ -159,7 +159,7 @@ export async function generateEmbeddings(
   const chunkInfo = getChunkInfo();
 
   let generated = 0;
-  const toEmbed: { key: string; heading: string; level: number; text: string; headingPath?: string[]; chunkTypeHint?: string; wikilinks?: string[]; startLine?: number; endLine?: number }[] = [];
+  const toEmbed: { key: string; heading: string; level: number; text: string; headingPath?: string[]; chunkTypeHint?: string; wikilinks?: string[]; startLine?: number; endLine?: number; relPath: string; md5: string; chunkCount: number }[] = [];
 
   for (const entry of entries) {
     const fullPath = resolve(sourceDir, entry.relPath);
@@ -176,25 +176,28 @@ export async function generateEmbeddings(
     const detection = detectFileChange(entry.relPath, currentContent, manifest);
     if (!detection.changed) continue;
 
+    // P0.3: 重建前清理该文件所有旧 vector/chunkInfo
+    for (const key of Object.keys(existing)) {
+      if (key === entry.relPath || key.startsWith(`${entry.relPath}###`)) {
+        delete existing[key];
+        delete chunkInfo[key];
+      }
+    }
+
     const chunks = await extractChunks(fullPath, entry.relPath, entry.title, maxEmbedLen);
 
-    // 更新 manifest：记录 MD5 + AST 分块
-    updateFileState(entry.relPath, {
-      md5: detection.currentMd5,
-      astChunkCount: chunks.length,
-      astIndexedAt: new Date().toISOString(),
-    });
-
-    for (const ch of chunks) {
-      toEmbed.push({
-        key: ch.key, heading: ch.heading, level: ch.level, text: ch.embedText,
-        headingPath: ch.headingPath, chunkTypeHint: ch.chunkTypeHint,
-        wikilinks: ch.wikilinks, startLine: ch.startLine, endLine: ch.endLine,
-      });
-    }
+    // 暂存 embedding 任务，manifest 延后到生成成功后再更新
+    const pendingChunks = chunks.map(ch => ({
+      key: ch.key, heading: ch.heading, level: ch.level, text: ch.embedText,
+      headingPath: ch.headingPath, chunkTypeHint: ch.chunkTypeHint,
+      wikilinks: ch.wikilinks, startLine: ch.startLine, endLine: ch.endLine,
+      relPath: entry.relPath, md5: detection.currentMd5, chunkCount: chunks.length,
+    }));
+    toEmbed.push(...pendingChunks);
   }
 
-  for (const { key, heading, level, text, headingPath, chunkTypeHint, wikilinks, startLine, endLine } of toEmbed) {
+  const generatedFiles = new Set<string>();
+  for (const { key, heading, level, text, headingPath, chunkTypeHint, wikilinks, startLine, endLine, relPath, md5, chunkCount } of toEmbed) {
     try {
       const vec = await embed(text);
       existing[key] = vec;
@@ -203,8 +206,20 @@ export async function generateEmbeddings(
         headingPath, chunkTypeHint, wikilinks, startLine, endLine,
       };
       generated++;
+      generatedFiles.add(relPath);
     } catch {
       /* skip */
+    }
+  }
+
+  // P0.2: embedding 生成成功后，再原子更新 manifest md5
+  for (const item of toEmbed) {
+    if (generatedFiles.has(item.relPath)) {
+      updateFileState(item.relPath, {
+        md5: item.md5,
+        astChunkCount: item.chunkCount,
+        astIndexedAt: new Date().toISOString(),
+      });
     }
   }
 

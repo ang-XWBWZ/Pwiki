@@ -1,4 +1,4 @@
-// store-index.ts �?index.json 持久化层
+// store-index.ts — index.json 持久化层
 //
 // 管理: 文件索引 Record<relPath, FileEntry>
 // 拆自�?store-settings.ts，索引不再嵌�?config.json

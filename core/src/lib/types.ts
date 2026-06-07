@@ -1,4 +1,4 @@
-// types.ts �?Wiki 共享类型 (v1.0)
+// types.ts — Wiki 共享类型 (v1.3)
 
 /** 搜索模式 */
 export type SearchMode = "keyword" | "semantic" | "hybrid";
@@ -115,6 +115,9 @@ export interface SearchCandidate {
   chunkHeading?: string;
   snippet?: string;
   semanticScore?: number;
+  headingPath?: string[];
+  startLine?: number;
+  endLine?: number;
 }
 
 /** 向量存储结构 */

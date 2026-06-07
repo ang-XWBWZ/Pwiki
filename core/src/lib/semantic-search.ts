@@ -199,6 +199,7 @@ export async function semanticCandidates(
 
   const minSim = opts.minScore ?? -1;
   const fileMap = new Map<string, { bestScore: number; bestChunk: number | undefined; chunkCount: number; bestHeading?: string }>();
+  const bestMeta = new Map<string, { key?: string; headingPath?: string[]; startLine?: number; endLine?: number }>();
 
   for (const [key, vec] of Object.entries(embeddings)) {
     const chunkMatch = key.match(/^(.*)###(\d+|llm)$/);
@@ -212,10 +213,15 @@ export async function semanticCandidates(
 
     const ci = chunkIdx !== undefined ? chunkInfo[key] : undefined;
     const heading = ci ? ci.heading.replace(/^#+\s*/, "") : undefined;
+    const headingPath = ci?.headingPath;
+    const startLine = ci?.startLine;
+    const endLine = ci?.endLine;
 
     const existing = fileMap.get(relPath);
     if (!existing || similarity > existing.bestScore) {
       fileMap.set(relPath, { bestScore: similarity, bestChunk: chunkIdx, chunkCount: (existing?.chunkCount ?? 0) + 1, bestHeading: heading });
+      // 保存 chunkKey 和行号
+      bestMeta.set(relPath, { key, headingPath, startLine, endLine });
     } else {
       existing.chunkCount++;
     }
