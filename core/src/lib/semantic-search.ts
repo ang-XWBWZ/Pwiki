@@ -231,11 +231,16 @@ export async function semanticCandidates(
   for (const [relPath, fm] of fileMap) {
     const bonus = Math.min((fm.chunkCount - 1) * MULTI_CHUNK_BONUS, MAX_MULTI_CHUNK_BONUS);
     const score = Math.round((fm.bestScore + bonus) * 100);
+    const meta = bestMeta.get(relPath);
     candidates.push({
       relPath, title: idx[relPath]?.title ?? "",
       score, source: "semantic",
       chunkIndex: fm.bestChunk, chunkHeading: fm.bestHeading,
       semanticScore: fm.bestScore + bonus,
+      chunkKey: meta?.key,
+      headingPath: meta?.headingPath,
+      startLine: meta?.startLine,
+      endLine: meta?.endLine,
     });
   }
 
@@ -277,8 +282,9 @@ export async function hybridCandidates(
     merged.push({
       relPath: base.relPath, title: base.title,
       score: Math.round(rrf * 10000), source: "hybrid",
-      chunkIndex: sem?.chunkIndex, chunkHeading: sem?.chunkHeading,
+      chunkKey: sem?.chunkKey, chunkIndex: sem?.chunkIndex, chunkHeading: sem?.chunkHeading,
       semanticScore: sem?.semanticScore,
+      headingPath: sem?.headingPath, startLine: sem?.startLine, endLine: sem?.endLine,
       snippet: sem?.chunkHeading || kw?.snippet,
     });
   }
@@ -300,6 +306,9 @@ function candidatesToHits(candidates: SearchCandidate[]): SearchHit[] {
       semanticScore: c.semanticScore,
       chunkIndex: c.chunkIndex,
       chunkHeading: c.chunkHeading,
+      headingPath: c.headingPath,
+      startLine: c.startLine,
+      endLine: c.endLine,
     };
   });
 }

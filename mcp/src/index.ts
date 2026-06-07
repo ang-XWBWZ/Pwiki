@@ -121,7 +121,7 @@ server.tool(
     content: z.string().optional().describe("Body content (after frontmatter)"),
   },
   async ({ source, path, title, tags, content }) => {
-    const result = engine.createEntry(source, path, title, tags ?? [], content ?? "");
+    const result = await engine.createEntry(source, path, title, tags ?? [], content ?? "");
     return text(result.startsWith("exists") ? result : `Created: ${result}`);
   },
 );
@@ -134,7 +134,7 @@ server.tool(
     title: z.string().describe("New title"),
   },
   async ({ path, title }) => {
-    const ok = engine.renameEntry(path, title);
+    const ok = await engine.renameEntry(path, title);
     return text(ok ? `Renamed ${path} to "${title}"` : `Not found: ${path}`);
   },
 );
@@ -147,7 +147,7 @@ server.tool(
     newPath: z.string().describe("New relative path"),
   },
   async ({ path, newPath }) => {
-    const ok = engine.moveEntry(path, newPath);
+    const ok = await engine.moveEntry(path, newPath);
     return text(ok ? `Moved ${path} to ${newPath}` : `Failed: source not found or target exists`);
   },
 );
@@ -161,7 +161,7 @@ server.tool(
     content: z.string().describe("New full content (including frontmatter)"),
   },
   async ({ source, path, content }) => {
-    const ok = engine.modifyEntry(source, path, content);
+    const ok = await engine.modifyEntry(source, path, content);
     return text(ok ? `Modified: ${path}` : `Failed to modify: ${path}`);
   },
 );

@@ -21,6 +21,7 @@ import { getContent } from "./content-cache.js";
 import { resolve, join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { wikiHome } from "../config.js";
+import { getChunkInfo } from "./store-vectors.js";
 import type { FileEntry } from "./types.js";
 
 // ═══════════════ 类型 ═══════════════
@@ -81,6 +82,37 @@ const FIELD_WEIGHTS: Record<string, number> = {
   body: 1.0,
 };
 
+/** 读取 LLM 编译字段 */
+function readCompiledFields(relPath: string): Record<string, string> | null {
+  const result: Record<string, string> = {};
+
+  // 1. 尝试从 chunkInfo[relPath###llm] 读取
+  const ci = getChunkInfo();
+  const llmKey = `${relPath}###llm`;
+  const llm = ci[llmKey];
+  if (llm?.topic) result.topic = llm.topic;
+  if (llm?.normalizedText) result.normalizedText = llm.normalizedText;
+  if (llm?.concepts?.length) result.concepts = llm.concepts.join(" ");
+  if (llm?.aliases?.length) result.aliases = llm.aliases.join(" ");
+  if (llm?.keywords?.length) result.keywords = llm.keywords.join(" ");
+
+  // 2. 尝试从 compiled/ 文件读取
+  try {
+    const safeName = relPath.replace(/\\/g, "_").replace(/\//g, "_").replace(/\.md$/i, "") + ".json";
+    const compiledPath = join(wikiHome(), "compiled", safeName);
+    if (existsSync(compiledPath)) {
+      const record = JSON.parse(readFileSync(compiledPath, "utf-8"));
+      const r = record?.result;
+      if (r?.topic && !result.topic) result.topic = r.topic;
+      if (r?.normalizedText && !result.normalizedText) result.normalizedText = r.normalizedText;
+      if (r?.concepts?.length && !result.concepts) result.concepts = r.concepts.join(" ");
+      if (r?.aliases?.length && !result.aliases) result.aliases = r.aliases.join(" ");
+    }
+  } catch { /* ignore */ }
+
+  return Object.keys(result).length > 0 ? result : null;
+}
+
 // ═══════════════ 倒排索引构建、更新、搜索 ═══════════════
 
 /**
@@ -138,6 +170,19 @@ export function addDocToIndex(entry: FileEntry, index: Bm25Index): void {
   addFieldTerms("title", titleTokens, entry.relPath, index);
   addFieldTerms("path", pathTokens, entry.relPath, index);
   if (tagTokens.length > 0) addFieldTerms("tags", tagTokens, entry.relPath, index);
+
+  // LLM compiled 字段: topic, concepts, aliases, normalizedText, keywords
+  const compiledFields = readCompiledFields(entry.relPath);
+  if (compiledFields) {
+    for (const [field, text] of Object.entries(compiledFields)) {
+      if (!text) continue;
+      const tokens = tokenize(text);
+      if (tokens.length > 0) {
+        doc.fields[field] = tokens.length;
+        addFieldTerms(field, tokens, entry.relPath, index);
+      }
+    }
+  }
 
   // 重新计算 N/avgdl
   const docs = Object.values(index.docs);
