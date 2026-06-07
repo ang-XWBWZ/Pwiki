@@ -161,66 +161,57 @@ export async function generateEmbeddings(
   let generated = 0;
   const toEmbed: { key: string; heading: string; level: number; text: string; headingPath?: string[]; chunkTypeHint?: string; wikilinks?: string[]; startLine?: number; endLine?: number; relPath: string; md5: string; chunkCount: number }[] = [];
 
+  // 按文件分组，实现文件级 all-or-nothing
   for (const entry of entries) {
     const fullPath = resolve(sourceDir, entry.relPath);
 
     let currentContent: string;
-    try {
-      currentContent = readFileSync(fullPath, "utf-8");
-    } catch {
-      continue;
-    }
+    try { currentContent = readFileSync(fullPath, "utf-8"); } catch { continue; }
 
-    // 用 manifest md5 检测变更（而非 mtime 比较）
     const manifest = getManifest();
     const detection = detectFileChange(entry.relPath, currentContent, manifest);
     if (!detection.changed) continue;
 
-    // P0.3: 重建前清理该文件所有旧 vector/chunkInfo
+    const chunks = await extractChunks(fullPath, entry.relPath, entry.title, maxEmbedLen);
+
+    // 先生成临时 vectors/chunkInfo
+    const tempVectors: Record<string, number[]> = {};
+    const tempChunks: Record<string, typeof chunkInfo[string]> = {};
+    let allOk = true;
+
+    for (const ch of chunks) {
+      try {
+        tempVectors[ch.key] = await embed(ch.embedText);
+        tempChunks[ch.key] = {
+          heading: ch.heading, level: ch.level,
+          headingPath: ch.headingPath, chunkTypeHint: ch.chunkTypeHint,
+          wikilinks: ch.wikilinks, startLine: ch.startLine, endLine: ch.endLine,
+        };
+      } catch {
+        allOk = false;
+        break;
+      }
+    }
+
+    if (!allOk) continue; // 文件级失败，保留旧 vectors，不更新 manifest
+
+    // 全部成功 → 清理旧数据，原子替换新数据
     for (const key of Object.keys(existing)) {
       if (key === entry.relPath || key.startsWith(`${entry.relPath}###`)) {
         delete existing[key];
         delete chunkInfo[key];
       }
     }
+    Object.assign(existing, tempVectors);
+    Object.assign(chunkInfo, tempChunks);
+    generated += chunks.length;
 
-    const chunks = await extractChunks(fullPath, entry.relPath, entry.title, maxEmbedLen);
-
-    // 暂存 embedding 任务，manifest 延后到生成成功后再更新
-    const pendingChunks = chunks.map(ch => ({
-      key: ch.key, heading: ch.heading, level: ch.level, text: ch.embedText,
-      headingPath: ch.headingPath, chunkTypeHint: ch.chunkTypeHint,
-      wikilinks: ch.wikilinks, startLine: ch.startLine, endLine: ch.endLine,
-      relPath: entry.relPath, md5: detection.currentMd5, chunkCount: chunks.length,
-    }));
-    toEmbed.push(...pendingChunks);
-  }
-
-  const generatedFiles = new Set<string>();
-  for (const { key, heading, level, text, headingPath, chunkTypeHint, wikilinks, startLine, endLine, relPath, md5, chunkCount } of toEmbed) {
-    try {
-      const vec = await embed(text);
-      existing[key] = vec;
-      chunkInfo[key] = {
-        heading, level,
-        headingPath, chunkTypeHint, wikilinks, startLine, endLine,
-      };
-      generated++;
-      generatedFiles.add(relPath);
-    } catch {
-      /* skip */
-    }
-  }
-
-  // P0.2: embedding 生成成功后，再原子更新 manifest md5
-  for (const item of toEmbed) {
-    if (generatedFiles.has(item.relPath)) {
-      updateFileState(item.relPath, {
-        md5: item.md5,
-        astChunkCount: item.chunkCount,
-        astIndexedAt: new Date().toISOString(),
-      });
-    }
+    // 更新 manifest md5
+    updateFileState(entry.relPath, {
+      md5: detection.currentMd5,
+      astChunkCount: chunks.length,
+      astIndexedAt: new Date().toISOString(),
+    });
   }
 
   // 娓呯悊鏃ф枃浠剁骇 key
@@ -238,23 +229,6 @@ export async function generateEmbeddings(
   }
 
   recomputeCentroid();
-
-  // v5.4: 补 manifest
-  for (const entry of entries) {
-    if (!getFileState(entry.relPath)) {
-      try {
-        const fullPath = resolve(sourceDir, entry.relPath);
-        const raw = readFileSync(fullPath, "utf-8");
-        const md5 = computeMD5(raw);
-        const chunks = await extractChunks(fullPath, entry.relPath, entry.title, maxEmbedLen);
-        updateFileState(entry.relPath, {
-          md5,
-          astChunkCount: chunks.length,
-          astIndexedAt: new Date().toISOString(),
-        });
-      } catch { /* skip */ }
-    }
-  }
 
   return generated;
 }

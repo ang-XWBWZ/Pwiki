@@ -133,10 +133,10 @@ export class WikiEngine {
     return { entry, content };
   }
 
-  createEntry(
+  async createEntry(
     sourceDir: string, relPath: string, title?: string,
     tags: string[] = [], content = "",
-  ): string {
+  ): Promise<string> {
     const finalPath = relPath.endsWith(".md") ? relPath : relPath + ".md";
     const finalAbs = resolve(sourceDir, finalPath);
     if (existsSync(finalAbs)) return "exists: " + finalAbs;
@@ -158,16 +158,15 @@ export class WikiEngine {
       idx.mergeIndex([entry]);
       cache.setContent(entry.relPath, fullContent);
 
-      // 同步 BM25 和 embedding
       this.rebuildAfterChange();
       if (cfg.getSemanticEnabled()) {
-        doGenerateEmbeddings(sourceDir, [entry]).catch(() => {});
+        await doGenerateEmbeddings(sourceDir, [entry]);
       }
     }
     return finalPath.replace(/\\/g, "/");
   }
 
-  renameEntry(relPath: string, newTitle: string): boolean {
+  async renameEntry(relPath: string, newTitle: string): Promise<boolean> {
     const entry = idx.getEntry(relPath);
     if (!entry) return false;
 
@@ -177,7 +176,6 @@ export class WikiEngine {
     let content: string;
     try { content = readFileSync(fullPath, "utf-8"); } catch { return false; }
 
-    // Update frontmatter title or add one
     const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
     let newContent: string;
     if (fmMatch) {
@@ -194,20 +192,17 @@ export class WikiEngine {
     writeFileSync(fullPath, newContent, "utf-8");
     cache.setContent(entry.relPath, newContent);
 
-    // Update index entry
     entry.title = newTitle;
     idx.mergeIndex([entry]);
 
-    // 同步 BM25（标题变更影响 token）
     this.rebuildAfterChange();
-    // 标题变更影响 embedding（embedText 含 heading 文本）
     if (cfg.getSemanticEnabled()) {
-      doGenerateEmbeddings(entry.sourceDir, [entry]).catch(() => {});
+      await doGenerateEmbeddings(entry.sourceDir, [entry]);
     }
     return true;
   }
 
-  moveEntry(relPath: string, newRelPath: string): boolean {
+  async moveEntry(relPath: string, newRelPath: string): Promise<boolean> {
     const entry = idx.getEntry(relPath);
     if (!entry) return false;
 
@@ -222,22 +217,19 @@ export class WikiEngine {
 
     const newEntry = parseFileEntry(entry.sourceDir, dstFile);
     if (newEntry) {
-      // 清理旧路径所有索引
       removeEntryFromAllStores(relPath);
-      // 写入新路径
       idx.mergeIndex([newEntry]);
       try { cache.setContent(newEntry.relPath, readFileSync(dstFile, "utf-8")); } catch {}
 
-      // 重建 BM25 和 embedding（path context 变了）
       this.rebuildAfterChange();
       if (cfg.getSemanticEnabled()) {
-        doGenerateEmbeddings(entry.sourceDir, [newEntry]).catch(() => {});
+        await doGenerateEmbeddings(entry.sourceDir, [newEntry]);
       }
     }
     return true;
   }
 
-  modifyEntry(sourceDir: string, relPath: string, content: string): boolean {
+  async modifyEntry(sourceDir: string, relPath: string, content: string): Promise<boolean> {
     const fullPath = resolve(sourceDir, relPath);
     try {
       writeFileSync(fullPath, content, "utf-8");
@@ -246,10 +238,9 @@ export class WikiEngine {
       if (entry) {
         idx.mergeIndex([entry]);
 
-        // 同步 BM25 和 embedding
         this.rebuildAfterChange();
         if (cfg.getSemanticEnabled()) {
-          doGenerateEmbeddings(sourceDir, [entry]).catch(() => {});
+          await doGenerateEmbeddings(sourceDir, [entry]);
         }
       }
       return true;
@@ -447,7 +438,10 @@ export class WikiEngine {
     const useModel = opts?.model || model;
 
     try {
-      // P2.12: 按 provider 能力组装参数，不硬编码 response_format/thinking
+      // P2.12: 按 provider 能力组装参数
+      const supportsJsonMode = process.env.LLM_JSON_MODE !== "off";
+      const supportsThinking = process.env.LLM_THINKING_PARAM !== "off";
+
       const body: Record<string, any> = {
         model: useModel,
         messages: [
@@ -456,12 +450,10 @@ export class WikiEngine {
         ],
         temperature: 0.1,
       };
-      // OpenAI-compatible providers 支持 json_object
-      if (!apiBase.includes("custom")) {
+      if (supportsJsonMode) {
         body.response_format = { type: "json_object" };
       }
-      // DeepSeek 支持 thinking 参数
-      if (!apiBase.includes("openai.com")) {
+      if (supportsThinking) {
         body.thinking = { type: "disabled" };
       }
 

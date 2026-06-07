@@ -254,5 +254,15 @@ export async function storeFileLLMVector(
   // model already obtained above
   setEmbeddings(existing, model.hfRepo, model.dim);
   setChunkInfo(chunkInfo);
+
+  // BM25 倒排索引重建（包含 LLM topic/concepts/aliases 字段）
+  try {
+    const { buildBm25Index, writeBm25Index, buildBm25Stats } = await import("./bm25.js");
+    const { writeBm25Stats } = await import("./store-index.js");
+    const index = buildBm25Index();
+    writeBm25Index(index);
+    writeBm25Stats(buildBm25Stats());
+  } catch { /* ignore */ }
+
   return true;
 }

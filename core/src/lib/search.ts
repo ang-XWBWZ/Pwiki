@@ -220,9 +220,12 @@ export function keywordCandidates(query: string, opts: CandidateOptions = {}): S
   const index = readBm25Index();
   if (index) {
     const raw = searchBm25Index(query, index, opts.topK ?? 200);
-    return raw.map(r => ({
-      relPath: r.relPath, title: "", score: r.score, source: "keyword" as const,
-    }));
+    const idx = getIndex();
+    return raw
+      .filter(r => idx[r.relPath] !== undefined) // 过滤 stale BM25 候选
+      .map(r => ({
+        relPath: r.relPath, title: "", score: r.score, source: "keyword" as const,
+      }));
   }
   const stats = readBm25Stats();
   if (!stats) return [];

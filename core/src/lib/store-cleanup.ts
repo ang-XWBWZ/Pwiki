@@ -7,7 +7,7 @@ import { removeEntry } from "./store-index.js";
 import { removeContent } from "./content-cache.js";
 import { getEmbeddings, setEmbeddings, getChunkInfo, setChunkInfo } from "./store-vectors.js";
 import { removeFileState } from "./file-manifest.js";
-import { buildBm25Stats } from "./bm25.js";
+import { buildBm25Stats, buildBm25Index, writeBm25Index } from "./bm25.js";
 import { writeBm25Stats } from "./store-index.js";
 
 /**
@@ -53,11 +53,12 @@ export function removeEntryFromAllStores(relPath: string): number {
   // 5. manifest
   removeFileState(relPath);
 
-  // 6. BM25 — 重建全局统计
+  // 6. BM25 — 重建并写入倒排索引 + 旧版兼容
   try {
-    const stats = buildBm25Stats();
-    writeBm25Stats(stats);
-  } catch { /* BM25 重建失败不阻塞 */ }
+    const index = buildBm25Index();
+    writeBm25Index(index);
+    writeBm25Stats(buildBm25Stats());
+  } catch { /* ignore */ }
 
   return vectorCount;
 }
