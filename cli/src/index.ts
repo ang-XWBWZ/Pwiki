@@ -138,9 +138,9 @@ program
   .option("-t, --title <title>", "Document title")
   .option("--tags <tags>", "Comma-separated tags")
   .option("--content <text>", "Body content")
-  .action((source: string, path: string, opts: any) => {
+  .action(async (source: string, path: string, opts: any) => {
     const tags = opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : [];
-    const result = engine().createEntry(resolve(source), path, opts.title, tags, opts.content ?? "");
+    const result = await engine().createEntry(resolve(source), path, opts.title, tags, opts.content ?? "");
     console.log(result.startsWith("exists") ? result : `Created: ${result}`);
   });
 
