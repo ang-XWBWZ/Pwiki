@@ -1,5 +1,5 @@
-// file-manifest.ts �?文件级追踪清�?(v1.0)
-// 适配�?extensions/wiki/lib/file-manifest.ts �?wikiHome 改为 config.ts
+// file-manifest.ts �?文件级追踪清�?(v1.0)
+// 适配�?extensions/wiki/lib/file-manifest.ts �?wikiHome 改为 config.ts
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
@@ -69,6 +69,33 @@ export function removeFileState(relPath: string): void {
   const m = getManifest();
   delete m.files[relPath];
   setManifest(m);
+}
+
+// ---- 变更检测 ----
+
+/** 变更检测结果 */
+export interface ChangeDetection {
+  changed: boolean;
+  currentMd5: string;
+  previousMd5: string | null;
+}
+
+/**
+ * 检测文件是否变更（以内容 MD5 为最终依据）
+ * 供 refresh / modify / rename / move 等操作复用
+ */
+export function detectFileChange(
+  relPath: string,
+  currentContent: string,
+  manifest: FileManifest,
+): ChangeDetection {
+  const currentMd5 = computeMD5(currentContent);
+  const previous = manifest.files[relPath];
+  return {
+    changed: !previous || previous.md5 !== currentMd5,
+    currentMd5,
+    previousMd5: previous?.md5 ?? null,
+  };
 }
 
 // ---- MD5 ----

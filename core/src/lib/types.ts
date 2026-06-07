@@ -28,6 +28,12 @@ export interface ChunkInfo {
   confidence?: number;
   contentClass?: string;
   temporalAnchor?: string;
+  // AST chunker 元数据
+  headingPath?: string[];
+  chunkTypeHint?: string;
+  wikilinks?: string[];
+  startLine?: number;
+  endLine?: number;
 }
 
 /** 待编译的原始�?*/
@@ -93,6 +99,22 @@ export interface SearchHit {
   semanticScore?: number;
   chunkIndex?: number;
   chunkHeading?: string;
+  headingPath?: string[];
+  startLine?: number;
+  endLine?: number;
+}
+
+/** 搜索候选（内部使用，未经展示阈值过滤） */
+export interface SearchCandidate {
+  relPath: string;
+  title: string;
+  score: number;
+  source: "keyword" | "semantic" | "hybrid";
+  chunkKey?: string;
+  chunkIndex?: number;
+  chunkHeading?: string;
+  snippet?: string;
+  semanticScore?: number;
 }
 
 /** 向量存储结构 */
@@ -116,4 +138,23 @@ export interface WikiStatus {
   model: string;
   modelDim: number;
   compiled: number;
+}
+
+/** chunk 读取结果 */
+export interface ChunkReadResult {
+  relPath: string;
+  title: string;
+  chunkIndex: number;
+  heading: string;
+  headingPath?: string[];
+  startLine: number;
+  endLine: number;
+  content: string;
+}
+
+/** chunk 上下文结果 */
+export interface ChunkContextResult {
+  current: ChunkReadResult;
+  previous: ChunkReadResult[];
+  next: ChunkReadResult[];
 }

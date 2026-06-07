@@ -15,6 +15,7 @@ import { keywordSearch } from "./lib/search.js";
 import { semanticSearch, hybridSearch } from "./lib/semantic-search.js";
 import { buildBm25Stats } from "./lib/bm25.js";
 import { writeBm25Stats } from "./lib/store-index.js";
+import { removeEntryFromAllStores } from "./lib/store-cleanup.js";
 import { scanDir } from "./lib/indexer-scan.js";
 import { generateEmbeddings as doGenerateEmbeddings } from "./lib/indexer-embed.js";
 import { getRawChunks, storeCompiledChunks, storeFileLLMVector } from "./lib/indexer-compile.js";
@@ -26,7 +27,7 @@ import {
 } from "./lib/semantic-compiler.js";
 import { findModel, getCurrentModel, selectModel, getBuiltinModels } from "./lib/model-registry.js";
 import type { ModelInfo } from "./lib/model-registry.js";
-import type { SearchMode, SearchHit, FileEntry, FileLLMData, WikiStatus } from "./lib/types.js";
+import type { SearchMode, SearchHit, FileEntry, FileLLMData, WikiStatus, ChunkReadResult, ChunkContextResult } from "./lib/types.js";
 
 export interface EngineConfig {
   basePath?: string;
@@ -82,8 +83,20 @@ export class WikiEngine {
   }
 
   async loadSource(absPath: string): Promise<number> {
+    // 保存旧索引，用于检测删除
+    const oldIndex = idx.getIndex();
+    const oldKeys = new Set(Object.keys(oldIndex).filter(k => oldIndex[k].sourceDir === absPath));
+
     const entries = await scanDir(absPath);
     idx.mergeIndex(entries);
+
+    // 检测已删除的文件
+    const newKeys = new Set(entries.map(e => e.relPath));
+    for (const oldKey of oldKeys) {
+      if (!newKeys.has(oldKey)) {
+        removeEntryFromAllStores(oldKey);
+      }
+    }
 
     // 重建 BM25 统计（每次 load/refresh 后）
     try {
@@ -154,14 +167,21 @@ export class WikiEngine {
       "created: " + new Date().toISOString(),
       "---", "",
     ].join("\n");
+    const fullContent = fm + content;
 
     mkdirSync(dirname(finalAbs), { recursive: true });
-    writeFileSync(finalAbs, fm + content, "utf-8");
+    writeFileSync(finalAbs, fullContent, "utf-8");
 
     const entry = parseFileEntry(sourceDir, finalAbs);
     if (entry) {
       idx.mergeIndex([entry]);
-      cache.setContent(entry.relPath, fm + content);
+      cache.setContent(entry.relPath, fullContent);
+
+      // 同步 BM25 和 embedding
+      this.rebuildAfterChange();
+      if (cfg.getSemanticEnabled()) {
+        doGenerateEmbeddings(sourceDir, [entry]).catch(() => {});
+      }
     }
     return finalPath.replace(/\\/g, "/");
   }
@@ -196,6 +216,9 @@ export class WikiEngine {
     // Update index entry
     entry.title = newTitle;
     idx.mergeIndex([entry]);
+
+    // 同步 BM25（标题变更影响 token）
+    this.rebuildAfterChange();
     return true;
   }
 
@@ -214,8 +237,17 @@ export class WikiEngine {
 
     const newEntry = parseFileEntry(entry.sourceDir, dstFile);
     if (newEntry) {
-      idx.removeEntry(relPath);
+      // 清理旧路径所有索引
+      removeEntryFromAllStores(relPath);
+      // 写入新路径
       idx.mergeIndex([newEntry]);
+      try { cache.setContent(newEntry.relPath, readFileSync(dstFile, "utf-8")); } catch {}
+
+      // 重建 BM25 和 embedding（path context 变了）
+      this.rebuildAfterChange();
+      if (cfg.getSemanticEnabled()) {
+        doGenerateEmbeddings(entry.sourceDir, [newEntry]).catch(() => {});
+      }
     }
     return true;
   }
@@ -226,9 +258,85 @@ export class WikiEngine {
       writeFileSync(fullPath, content, "utf-8");
       cache.setContent(relPath, content);
       const entry = parseFileEntry(sourceDir, fullPath);
-      if (entry) idx.mergeIndex([entry]);
+      if (entry) {
+        idx.mergeIndex([entry]);
+
+        // 同步 BM25 和 embedding
+        this.rebuildAfterChange();
+        if (cfg.getSemanticEnabled()) {
+          doGenerateEmbeddings(sourceDir, [entry]).catch(() => {});
+        }
+      }
       return true;
     } catch { return false; }
+  }
+
+  /** BM25 统计重建（CRUD 后同步） */
+  private rebuildAfterChange(): void {
+    try {
+      writeBm25Stats(buildBm25Stats());
+    } catch { /* ignore */ }
+  }
+
+  // ═══════════════ Chunk Read ═══════════════
+
+  /**
+   * 读取指定 chunk 的内容
+   */
+  readChunk(relPath: string, chunkIndex: number): ChunkReadResult | null {
+    const entry = idx.getEntry(relPath);
+    if (!entry) return null;
+
+    let content = cache.getContent(relPath);
+    if (!content) {
+      try { content = readFileSync(resolve(entry.sourceDir, relPath), "utf-8"); }
+      catch { return null; }
+    }
+
+    const chunkKey = `${relPath.replace(/\\/g, "/")}###${chunkIndex}`;
+    const ci = vec.getChunkInfo()[chunkKey];
+    if (!ci) return null;
+
+    const lines = content.split("\n");
+    const chunkContent = lines.slice((ci.startLine ?? 1) - 1, ci.endLine).join("\n");
+
+    return {
+      relPath,
+      title: entry.title,
+      chunkIndex,
+      heading: ci.heading,
+      headingPath: ci.headingPath,
+      startLine: ci.startLine ?? 1,
+      endLine: ci.endLine ?? lines.length,
+      content: chunkContent,
+    };
+  }
+
+  /**
+   * 读取 chunk 及其前后相邻 chunk
+   */
+  readChunkContext(
+    relPath: string,
+    chunkIndex: number,
+    before = 1,
+    after = 1,
+  ): ChunkContextResult | null {
+    const current = this.readChunk(relPath, chunkIndex);
+    if (!current) return null;
+
+    const previous: ChunkReadResult[] = [];
+    const next: ChunkReadResult[] = [];
+
+    for (let i = 1; i <= before; i++) {
+      const prev = this.readChunk(relPath, chunkIndex - i);
+      if (prev) previous.unshift(prev);
+    }
+    for (let i = 1; i <= after; i++) {
+      const nxt = this.readChunk(relPath, chunkIndex + i);
+      if (nxt) next.push(nxt);
+    }
+
+    return { current, previous, next };
   }
 
   // ═══════════════ Semantic ═══════════════

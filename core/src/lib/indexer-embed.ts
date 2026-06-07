@@ -2,14 +2,14 @@
 //
 // extractChunks (濮旀墭 ast-chunker) + generateEmbeddings + embedSingleFile
 
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { getSemanticEnabled } from "./store-config.js";
 import { getEmbeddings, setEmbeddings, getChunkInfo, setChunkInfo, setCentroid } from "./store-vectors.js";
 import { getCurrentModel } from "./model-registry.js";
 import { initialize, isAvailable, embed } from "./embedder.js";
 import { extractChunksAST } from "./ast-chunker.js";
-import { updateFileState, computeMD5, getFileState } from "./file-manifest.js";
+import { updateFileState, computeMD5, getFileState, detectFileChange, getManifest } from "./file-manifest.js";
 import type { FileEntry } from "./types.js";
 
 /** 鏍囬琛屾鍒欙紙浠呯敤浜?fallback锛?*/
@@ -36,7 +36,7 @@ export async function extractChunks(
   relPath: string,
   defaultTitle: string,
   maxEmbedLen = 800,
-): Promise<{ key: string; heading: string; level: number; embedText: string; rawText: string }[]> {
+): Promise<{ key: string; heading: string; level: number; embedText: string; rawText: string; headingPath: string[]; chunkTypeHint: string; wikilinks: string[]; startLine: number; endLine: number }[]> {
   try {
     const raw = readFileSync(filePath, "utf-8");
     // 浼樺厛 AST
@@ -48,6 +48,11 @@ export async function extractChunks(
         level: c.level,
         embedText: c.embedText,
         rawText: c.rawText,
+        headingPath: c.headingPath,
+        chunkTypeHint: c.chunkTypeHint,
+        wikilinks: c.wikilinks,
+        startLine: c.startLine,
+        endLine: c.endLine,
       }));
     }
   } catch {
@@ -91,7 +96,7 @@ export async function extractChunks(
       }
     }
 
-    const result: { key: string; heading: string; level: number; embedText: string; rawText: string }[] = [];
+    const result: { key: string; heading: string; level: number; embedText: string; rawText: string; headingPath: string[]; chunkTypeHint: string; wikilinks: string[]; startLine: number; endLine: number }[] = [];
     for (let i = 0; i < chunks.length; i++) {
       const ch = chunks[i];
       let heading: string;
@@ -119,12 +124,17 @@ export async function extractChunks(
         level,
         embedText,
         rawText,
+        headingPath: [headingClean],
+        chunkTypeHint: "note",
+        wikilinks: [],
+        startLine: 1,
+        endLine: 1,
       });
     }
 
     return result;
   } catch {
-    return [{ key: relPath, heading: defaultTitle, level: 0, embedText: defaultTitle, rawText: defaultTitle }];
+    return [{ key: relPath, heading: defaultTitle, level: 0, embedText: defaultTitle, rawText: defaultTitle, headingPath: [defaultTitle], chunkTypeHint: "note", wikilinks: [], startLine: 1, endLine: 1 }];
   }
 }
 
@@ -149,47 +159,49 @@ export async function generateEmbeddings(
   const chunkInfo = getChunkInfo();
 
   let generated = 0;
-  const toEmbed: { key: string; heading: string; level: number; text: string }[] = [];
+  const toEmbed: { key: string; heading: string; level: number; text: string; headingPath?: string[]; chunkTypeHint?: string; wikilinks?: string[]; startLine?: number; endLine?: number }[] = [];
 
   for (const entry of entries) {
     const fullPath = resolve(sourceDir, entry.relPath);
 
-    // v5.4: 璁＄畻 MD5
-    let currentMD5 = "";
+    let currentContent: string;
     try {
-      currentMD5 = computeMD5(readFileSync(fullPath, "utf-8"));
+      currentContent = readFileSync(fullPath, "utf-8");
     } catch {
       continue;
     }
 
-    try {
-      const fileMtime = statSync(fullPath).mtime.toISOString();
-      if (existing[entry.relPath] || existing[`${entry.relPath}###0`]) {
-        if (fileMtime === entry.mtime) continue;
-      }
-    } catch {
-      continue;
-    }
+    // 用 manifest md5 检测变更（而非 mtime 比较）
+    const manifest = getManifest();
+    const detection = detectFileChange(entry.relPath, currentContent, manifest);
+    if (!detection.changed) continue;
 
     const chunks = await extractChunks(fullPath, entry.relPath, entry.title, maxEmbedLen);
 
-    // 鏇存柊 manifest锛氳褰?MD5 + AST 鍒嗗潡
+    // 更新 manifest：记录 MD5 + AST 分块
     updateFileState(entry.relPath, {
-      md5: currentMD5,
+      md5: detection.currentMd5,
       astChunkCount: chunks.length,
       astIndexedAt: new Date().toISOString(),
     });
 
     for (const ch of chunks) {
-      toEmbed.push({ key: ch.key, heading: ch.heading, level: ch.level, text: ch.embedText });
+      toEmbed.push({
+        key: ch.key, heading: ch.heading, level: ch.level, text: ch.embedText,
+        headingPath: ch.headingPath, chunkTypeHint: ch.chunkTypeHint,
+        wikilinks: ch.wikilinks, startLine: ch.startLine, endLine: ch.endLine,
+      });
     }
   }
 
-  for (const { key, heading, level, text } of toEmbed) {
+  for (const { key, heading, level, text, headingPath, chunkTypeHint, wikilinks, startLine, endLine } of toEmbed) {
     try {
       const vec = await embed(text);
       existing[key] = vec;
-      chunkInfo[key] = { heading, level };
+      chunkInfo[key] = {
+        heading, level,
+        headingPath, chunkTypeHint, wikilinks, startLine, endLine,
+      };
       generated++;
     } catch {
       /* skip */

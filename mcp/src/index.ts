@@ -282,6 +282,48 @@ server.tool(
   },
 );
 
+// ═══════════════ Chunk Read ═══════════════
+
+server.tool(
+  "wiki_read_chunk",
+  "Read a specific chunk from a wiki entry by chunk index. Use after wiki_search returns chunkIndex.",
+  {
+    path: z.string().describe("Relative path of the entry"),
+    chunkIndex: z.number().int().min(0).describe("Chunk index from search results"),
+  },
+  async ({ path, chunkIndex }) => {
+    const result = engine.readChunk(path, chunkIndex);
+    if (!result) return text(`Not found: ${path} chunk ${chunkIndex}`);
+    const hpath = result.headingPath?.length ? `\nHeading: ${result.headingPath.join(" > ")}` : "";
+    const loc = `\nLines: ${result.startLine}-${result.endLine}`;
+    return text(`# ${result.title} [chunk ${chunkIndex}]${hpath}${loc}\n\n${result.content}`);
+  },
+);
+
+server.tool(
+  "wiki_read_context",
+  "Read a chunk and its surrounding context (before/after chunks).",
+  {
+    path: z.string().describe("Relative path of the entry"),
+    chunkIndex: z.number().int().min(0).describe("Chunk index from search results"),
+    before: z.number().int().min(0).optional().describe("Chunks to include before (default 1)"),
+    after: z.number().int().min(0).optional().describe("Chunks to include after (default 1)"),
+  },
+  async ({ path, chunkIndex, before, after }) => {
+    const result = engine.readChunkContext(path, chunkIndex, before ?? 1, after ?? 1);
+    if (!result) return text(`Not found: ${path} chunk ${chunkIndex}`);
+    const parts: string[] = [];
+    for (const prev of result.previous) {
+      parts.push(`## Previous (chunk ${prev.chunkIndex})\n${prev.content}\n`);
+    }
+    parts.push(`## Current (chunk ${result.current.chunkIndex})\n${result.current.content}\n`);
+    for (const nxt of result.next) {
+      parts.push(`## Next (chunk ${nxt.chunkIndex})\n${nxt.content}\n`);
+    }
+    return text(`# ${result.current.title}\n\n${parts.join("\n")}`);
+  },
+);
+
 // ═══════════════ Status & Models ═══════════════
 
 server.tool(

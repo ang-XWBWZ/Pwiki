@@ -12,7 +12,7 @@ import { bm25Score, getDocTokens } from "./bm25.js";
 import type { Bm25Stats } from "./bm25.js";
 import { resolve } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import type { FileEntry, SearchHit } from "./types.js";
+import type { FileEntry, SearchHit, SearchCandidate } from "./types.js";
 
 /** BM25 得分缩放因子（使分值落在和旧算法相近的范围） */
 const BM25_SCALE = 10;
@@ -185,3 +185,46 @@ function legacyContext(content: string, query: string, maxLen = 100): string {
 }
 
 export const search = keywordSearch;
+
+// ═══════════════ 候选层（供 hybrid 融合，不经展示阈值过滤） ═══════════════
+
+interface CandidateOptions {
+  topK?: number;
+}
+
+/**
+ * 关键词候选（原始 BM25 结果，无阈值裁剪）
+ * 供 hybridCandidates 使用
+ */
+export function keywordCandidates(query: string, opts: CandidateOptions = {}): SearchCandidate[] {
+  const stats = readBm25Stats();
+  const idx = getIndex();
+  const queryTokens = tokenize(query);
+  const candidates: SearchCandidate[] = [];
+
+  if (!stats) return [];
+
+  for (const [relPath, entry] of Object.entries(idx)) {
+    let score = 0;
+    const titleLower = entry.title.toLowerCase();
+    const tagsLower = entry.tags.map(t => t.toLowerCase());
+
+    for (const tok of queryTokens) {
+      if (titleLower.includes(tok)) score += TITLE_WEIGHT;
+      if (relPath.toLowerCase().includes(tok)) score += PATH_WEIGHT / queryTokens.length;
+      if (tagsLower.some(t => t.includes(tok))) score += TAG_WEIGHT;
+    }
+
+    const docTokens = getDocTokens(entry);
+    if (docTokens) {
+      score += bm25Score(queryTokens, docTokens, stats) * BM25_SCALE;
+    }
+
+    if (score <= 0) continue;
+
+    candidates.push({ relPath, title: entry.title, score: Math.round(score), source: "keyword" });
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  return opts.topK ? candidates.slice(0, opts.topK) : candidates;
+}

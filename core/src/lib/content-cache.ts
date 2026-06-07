@@ -28,6 +28,11 @@ export function clearSource(sourceDir: string): void {
   // 实际清除由调用方遍历处理。
 }
 
+/** 删除单条缓存 */
+export function removeContent(relPath: string): void {
+  cache.delete(relPath);
+}
+
 /** 清除所有缓存 */
 export function clearAll(): void {
   cache.clear();

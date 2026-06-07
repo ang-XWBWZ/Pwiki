@@ -5,6 +5,13 @@
 //   ASCII 字母/数字 → 按非字母数字切分，保留 ≥2 字符的词
 //   其他（标点、空白）→ 丢弃，作分隔符
 //
+// 增强拆分（v1.2）：对每个 ASCII token 追加子 token：
+//   snake_case → finish_reason, finish, reason
+//   SCREAMING_SNAKE → llm_api_base, llm, api, base
+//   kebab-case → sub2api-recover, sub2api, recover
+//   camelCase/PascalCase → openaicompatible, open, ai, compatible
+//   dot/slash path → model_quantized.onnx → + onnx, model_quantized, ...
+//
 // 查询和文档使用同一个 tokenize()，确保 BM25 token 对齐。
 
 /**
@@ -24,7 +31,11 @@ function isCJK(cp: number): boolean {
 function isASCII(cp: number): boolean {
   return (cp >= 0x61 && cp <= 0x7A)  // a-z
       || (cp >= 0x41 && cp <= 0x5A)  // A-Z
-      || (cp >= 0x30 && cp <= 0x39); // 0-9
+      || (cp >= 0x30 && cp <= 0x39)  // 0-9
+      || cp === 0x5F                  // _ (snake_case)
+      || cp === 0x2D                  // - (kebab-case)
+      || cp === 0x2E                  // . (file extension)
+      || cp === 0x2F;                 // / (path separator)
 }
 
 /**
@@ -45,10 +56,8 @@ export function tokenize(text: string): string[] {
    */
   function flushCJK(): void {
     if (cjkBuf.length < 2) {
-      // 单字符 CJK：保留
       if (cjkBuf.length === 1) tokens.push(cjkBuf[0]);
     } else {
-      // 滑动窗口生成所有相邻二元组
       for (let i = 0; i < cjkBuf.length - 1; i++) {
         tokens.push(cjkBuf[i] + cjkBuf[i + 1]);
       }
@@ -57,12 +66,14 @@ export function tokenize(text: string): string[] {
   }
 
   /**
-   * 将 ASCII 缓冲区输出为单词（≥2 字符）
+   * 将 ASCII 缓冲区输出为单词（≥2 字符），并追加工程拆分 token
    */
   function flushASCII(): void {
-    if (asciiBuf.length >= 2) {
-      tokens.push(asciiBuf.join("").toLowerCase());
-    }
+    if (asciiBuf.length < 2) { asciiBuf.length = 0; return; }
+    const word = asciiBuf.join("");
+    tokens.push(word.toLowerCase());
+    // 工程拆分：需要原始大小写信息
+    expandToken(word, tokens);
     asciiBuf.length = 0;
   }
 
@@ -88,4 +99,72 @@ export function tokenize(text: string): string[] {
   flushASCII();
 
   return tokens;
+}
+
+// ═══════════════ 工程 token 拆分 ═══════════════
+
+/**
+ * 对 ASCII token 追加子 token（工程场景拆分）
+ * 保留原始 token，同时追加拆分后的子 token
+ */
+/**
+ * camelCase / PascalCase 拆分
+ * 例: "OpenAICompatible" → ["Open", "AI", "Compatible"]
+ */
+function splitCamelCase(word: string): string[] {
+  const withSpaces = word
+    .replace(/([a-z])([A-Z])/g, "$1 $2")           // lowerUpper → lower Upper
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");     // UPPERLower → UPPER Lower
+  return withSpaces.split(" ").filter(p => p.length > 0);
+}
+
+function expandToken(word: string, out: string[]): void {
+  const lower = word.toLowerCase();
+
+  // snake_case / SCREAMING_SNAKE_CASE
+  if (word.includes("_")) {
+    const parts = lower.split("_").filter(p => p.length >= 2);
+    for (const p of parts) out.push(p);
+  }
+
+  // kebab-case
+  if (word.includes("-")) {
+    const parts = lower.split("-").filter(p => p.length >= 2);
+    for (const p of parts) out.push(p);
+  }
+
+  // camelCase / PascalCase 拆分
+  // 例: OpenAICompatible → open, ai, compatible
+  const camelParts = splitCamelCase(word);
+  if (camelParts.length > 1) {
+    for (const p of camelParts) {
+      const lp = p.toLowerCase();
+      if (lp.length >= 2) out.push(lp);
+    }
+  }
+
+  // dot 路径拆分: model_quantized.onnx → onnx
+  const dotIdx = word.lastIndexOf(".");
+  if (dotIdx > 0 && dotIdx < word.length - 1) {
+    const ext = lower.slice(dotIdx + 1);
+    if (ext.length >= 2) out.push(ext);
+    const base = lower.slice(0, dotIdx);
+    if (base.length >= 2) out.push(base);
+  }
+
+  // slash 路径拆分: packages/core/src/search → packages, core, src, search
+  if (word.includes("/")) {
+    const parts = lower.split("/").filter(p => p.length >= 2);
+    for (const p of parts) {
+      out.push(p);
+      // 对路径段再做 dot 拆分: search.ts → search, ts
+      const pDot = p.lastIndexOf(".");
+      if (pDot > 0 && pDot < p.length - 1) {
+        const pExt = p.slice(pDot + 1);
+        if (pExt.length >= 2) out.push(pExt);
+        const pBase = p.slice(0, pDot);
+        if (pBase.length >= 2) out.push(pBase);
+      }
+    }
+  }
 }
