@@ -49,7 +49,20 @@ server.tool(
     const lines = pageHits.map((h: any, i: number) => {
       const tags = h.tags.length ? ` [${h.tags.join(", ")}]` : "";
       const snippet = h.snippet ? `\n  ${h.snippet.replace(/\n/g, "\n  ")}` : "";
-      return `${i + 1}. ${h.title}${tags}\n  ${h.relPath}${snippet}`;
+      // chunk 定位信息
+      let loc = "";
+      if (h.chunkIndex !== undefined) {
+        loc += ` | chunk: ${h.chunkIndex}`;
+        if (h.startLine !== undefined && h.endLine !== undefined) {
+          loc += ` | lines: ${h.startLine}-${h.endLine}`;
+        }
+        if (h.headingPath?.length) {
+          loc += ` | heading: ${h.headingPath.join(" > ")}`;
+        } else if (h.chunkHeading) {
+          loc += ` | heading: ${h.chunkHeading}`;
+        }
+      }
+      return `${i + 1}. ${h.title}${tags}\n  ${h.relPath}${loc}${snippet}`;
     });
 
     return text(`"${query}" — ${hits.length} results (${mode ?? "hybrid"})\n\n${lines.join("\n\n")}`);
