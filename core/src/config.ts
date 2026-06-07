@@ -68,6 +68,10 @@ export function modelsDir(): string {
   return d;
 }
 
+export function bm25StatsFile(): string {
+  return join(wikiHome(), "bm25_stats.json");
+}
+
 export function cacheDir(): string {
   const d = join(wikiHome(), "cache");
   mkdirSync(d, { recursive: true });

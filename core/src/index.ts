@@ -25,6 +25,7 @@ export {
   getSemanticEnabled, setSemanticEnabled,
   readModelId, writeModelId, getWikiModel,
   getIndex, mergeIndex, removeEntry, updateEntryPath, getEntry, stats,
+  readBm25Stats, writeBm25Stats,
 } from "./lib/store.js";
 export {
   getEmbeddings, setEmbeddings,
@@ -47,6 +48,11 @@ export {
 // Search
 export { keywordSearch } from "./lib/search.js";
 export { semanticSearch, hybridSearch } from "./lib/semantic-search.js";
+
+// BM25 & Tokenizer
+export { tokenize } from "./lib/tokenizer.js";
+export { buildBm25Stats, bm25Score, idf, getDocTokens } from "./lib/bm25.js";
+export type { Bm25Stats } from "./lib/bm25.js";
 
 // Indexer
 export { scanDir } from "./lib/indexer-scan.js";

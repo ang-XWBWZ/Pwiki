@@ -1,11 +1,12 @@
-// store-index.ts �?index.json 持久化层
+// store-index.ts �?index.json 持久化层
 //
 // 管理: 文件索引 Record<relPath, FileEntry>
-// 拆自�?store-settings.ts，索引不再嵌�?config.json
+// 拆自�?store-settings.ts，索引不再嵌�?config.json
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { indexFile } from "../config.js";
+import { indexFile, bm25StatsFile } from "../config.js";
 import type { FileEntry } from "./types.js";
+import type { Bm25Stats } from "./bm25.js";
 import { setLastScan } from "./store-config.js";
 
 // ---- 核心读写 ----
@@ -64,7 +65,7 @@ export function updateEntryPath(
   return true;
 }
 
-/** �?sourceDir 删除所有索引条�?*/
+/** �?sourceDir 删除所有索引条�?*/
 export function removeEntriesBySource(sourceDir: string): number {
   const idx = readIndex();
   let count = 0;
@@ -82,4 +83,18 @@ export function removeEntriesBySource(sourceDir: string): number {
 
 export function indexStats(): { files: number } {
   return { files: Object.keys(readIndex()).length };
+}
+
+// ---- BM25 统计持久化 ----
+
+export function readBm25Stats(): Bm25Stats | null {
+  try {
+    const p = bm25StatsFile();
+    if (existsSync(p)) return JSON.parse(readFileSync(p, "utf-8"));
+  } catch { /* ignore */ }
+  return null;
+}
+
+export function writeBm25Stats(stats: Bm25Stats): void {
+  writeFileSync(bm25StatsFile(), JSON.stringify(stats, null, 2), "utf-8");
 }

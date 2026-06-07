@@ -13,6 +13,8 @@ import * as emb from "./lib/embedder.js";
 import * as cache from "./lib/content-cache.js";
 import { keywordSearch } from "./lib/search.js";
 import { semanticSearch, hybridSearch } from "./lib/semantic-search.js";
+import { buildBm25Stats } from "./lib/bm25.js";
+import { writeBm25Stats } from "./lib/store-index.js";
 import { scanDir } from "./lib/indexer-scan.js";
 import { generateEmbeddings as doGenerateEmbeddings } from "./lib/indexer-embed.js";
 import { getRawChunks, storeCompiledChunks, storeFileLLMVector } from "./lib/indexer-compile.js";
@@ -47,13 +49,48 @@ export class WikiEngine {
 
   removeSource(target: string): string | null {
     const removed = cfg.removeSource(target);
-    if (removed) idx.removeEntriesBySource(removed);
+    if (removed) {
+      idx.removeEntriesBySource(removed);
+
+      // 清理语义向量（移除已卸载数据源的 embedding）
+      try {
+        const allIdx = idx.getIndex();
+        const embeddings = vec.getEmbeddings();
+        const chunkInfo = vec.getChunkInfo();
+        let changed = false;
+        for (const key of Object.keys(embeddings)) {
+          const relPath = key.replace(/###.*$/, "");
+          if (!allIdx[relPath]) {
+            delete embeddings[key];
+            delete chunkInfo[key];
+            changed = true;
+          }
+        }
+        if (changed) {
+          vec.setEmbeddings(embeddings);
+          vec.setChunkInfo(chunkInfo);
+        }
+      } catch { /* ignore */ }
+
+      // 重建 BM25 统计
+      try {
+        const stats = buildBm25Stats();
+        writeBm25Stats(stats);
+      } catch { /* ignore */ }
+    }
     return removed;
   }
 
   async loadSource(absPath: string): Promise<number> {
     const entries = await scanDir(absPath);
     idx.mergeIndex(entries);
+
+    // 重建 BM25 统计（每次 load/refresh 后）
+    try {
+      const stats = buildBm25Stats();
+      writeBm25Stats(stats);
+    } catch { /* 统计失败不影响主流程 */ }
+
     if (cfg.getSemanticEnabled() && entries.length > 0) {
       doGenerateEmbeddings(absPath, entries).catch(() => {});
     }

@@ -1,4 +1,4 @@
-// store.ts �?数据�?barrel
+// store.ts �?数据�?barrel
 // 聚合 store-config + store-index + store-vectors
 
 export {
@@ -11,6 +11,7 @@ export {
 export {
   getIndex, mergeIndex, removeEntry, updateEntryPath, getEntry,
   removeEntriesBySource, indexStats,
+  readBm25Stats, writeBm25Stats,
 } from "./store-index.js";
 
 export {

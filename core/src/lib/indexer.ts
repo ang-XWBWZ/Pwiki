@@ -5,3 +5,4 @@
 export { scanDir } from "./indexer-scan.js";
 export { extractChunks, generateEmbeddings, embedSingleFile } from "./indexer-embed.js";
 export { getRawChunks, storeCompiledChunks, storeFileSegments, storeFileLLMVector } from "./indexer-compile.js";
+export { buildBm25Stats } from "./bm25.js";
