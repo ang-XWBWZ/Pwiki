@@ -157,7 +157,9 @@ async function doInit(): Promise<boolean> {
       const onnxDir = resolve(localModelDir(), "onnx");
       if (!existsSync(resolve(onnxDir, "model.onnx"))
           && existsSync(resolve(onnxDir, "model_quantized.onnx"))) {
-        pipelineOpts.model_file_name = "model_quantized";
+        // Transformers.js 将 q8 映射为 model_quantized.onnx。显式设置可避免 CPU
+        // 默认 fp32 的警告，也不会把本地 INT8 权重误当作 FP32 文件。
+        pipelineOpts.dtype = "q8";
       }
       pipelineOpts.progress_callback = null;
     }

@@ -3,23 +3,30 @@
 // 问题: search.ts 每次搜索都 readFileSync 读磁盘
 // 修复: 索引时将文件内容缓存到内存，搜索只读缓存
 //
-// 单例 Map<relPath, fullContent> — 加载数据源时填充
+// 单例 Map<sourceDir + relPath, fullContent> — 加载数据源时填充
 
 const cache = new Map<string, string>();
 
+function cacheKey(relPath: string, sourceDir?: string): string {
+  const normalizedPath = relPath.replace(/\\/g, "/");
+  if (!sourceDir) return normalizedPath;
+  return `${sourceDir.replace(/\\/g, "/")}\0${normalizedPath}`;
+}
+
 /** 存入缓存 */
-export function setContent(relPath: string, content: string): void {
-  cache.set(relPath, content);
+export function setContent(relPath: string, content: string, sourceDir?: string): void {
+  cache.set(cacheKey(relPath, sourceDir), content);
 }
 
 /** 读取缓存 */
-export function getContent(relPath: string): string | undefined {
-  return cache.get(relPath);
+export function getContent(relPath: string, sourceDir?: string): string | undefined {
+  return cache.get(cacheKey(relPath, sourceDir))
+    ?? (sourceDir ? cache.get(cacheKey(relPath)) : undefined);
 }
 
 /** 检查是否已缓存 */
-export function hasContent(relPath: string): boolean {
-  return cache.has(relPath);
+export function hasContent(relPath: string, sourceDir?: string): boolean {
+  return cache.has(cacheKey(relPath, sourceDir));
 }
 
 /** 按 sourceDir 清除缓存条目 */
@@ -29,8 +36,9 @@ export function clearSource(sourceDir: string): void {
 }
 
 /** 删除单条缓存 */
-export function removeContent(relPath: string): void {
-  cache.delete(relPath);
+export function removeContent(relPath: string, sourceDir?: string): void {
+  cache.delete(cacheKey(relPath, sourceDir));
+  if (sourceDir) cache.delete(cacheKey(relPath));
 }
 
 /** 清除所有缓存 */

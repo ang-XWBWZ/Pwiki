@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { indexFile, bm25StatsFile } from "../config.js";
 import type { FileEntry } from "./types.js";
 import type { Bm25Stats } from "./bm25.js";
+import { BM25_INDEX_VERSION } from "./bm25-schema.js";
 import { setLastScan } from "./store-config.js";
 
 // ---- 核心读写 ----
@@ -90,7 +91,10 @@ export function indexStats(): { files: number } {
 export function readBm25Stats(): Bm25Stats | null {
   try {
     const p = bm25StatsFile();
-    if (existsSync(p)) return JSON.parse(readFileSync(p, "utf-8"));
+    if (existsSync(p)) {
+      const stats = JSON.parse(readFileSync(p, "utf-8"));
+      if (stats?.version === BM25_INDEX_VERSION) return stats;
+    }
   } catch { /* ignore */ }
   return null;
 }

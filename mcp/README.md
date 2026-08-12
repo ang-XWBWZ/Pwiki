@@ -25,14 +25,35 @@ npm i -g @llangtop/pwiki-mcp
 }
 ```
 
-## 工具（19 个）
+## 工具（22 个）
+
+## MCP 发现与操作说明
+
+支持 MCP discovery 的客户端连接后可直接读取服务初始化说明；Pwiki 还公开以下只读内容：
+
+| 类型 | 名称 | 用途 |
+|------|------|------|
+| Resource | `pwiki://guide/operations` | 安全配置、检索、维护、语义搜索、精排与编译流程 |
+| Resource | `pwiki://guide/tool-reference` | 按用途分组的 22 个 MCP 工具清单 |
+| Prompt | `pwiki-search-workflow` | 带 `query` 参数的检索工作流模板 |
+| Prompt | `pwiki-maintenance-workflow` | 变更数据源、索引或条目前的维护流程模板 |
+
+在 Pi MCP Bridge 中，依次调用 `mcp_discover(action="catalog", server="pwiki")`、`mcp_discover(action="resource", server="pwiki", uri="pwiki://guide/operations")` 或 `mcp_discover(action="prompt", server="pwiki", name="pwiki-search-workflow", arguments={ query: "..." })` 即可按需读取。说明内容是服务端参考资料，宿主的授权与确认策略仍然有效。
 
 ### 搜索与读取
 
 | 工具 | 说明 |
 |------|------|
-| `wiki_search` | 搜索，默认 hybrid |
-| `wiki_read_entry` | 读条目全文 |
+| `wiki_search` | 搜索，默认 hybrid；可指定 `source` + `pathPrefix` |
+| `wiki_read_entry` | 按相对路径读全文；建议传入搜索结果的 `sourceId` |
+| `wiki_read_chunk` | 按搜索结果中的 chunk 索引读取片段 |
+| `wiki_read_context` | 读取片段及其前后上下文 |
+
+`wiki_status` 会列出稳定的 source ID。设置 `source` 后，Pwiki 只读取该
+物理分片；设置 `pathPrefix` 后，在关键词评分和向量相似度计算前排除路径外
+内容。限定检索没有结果时不会回退到全局数据。读取搜索结果时应把返回的
+`sourceId` 继续传给 `wiki_read_entry`、`wiki_read_chunk` 或
+`wiki_read_context`。
 
 ### 数据源
 
@@ -58,6 +79,16 @@ npm i -g @llangtop/pwiki-mcp
 | `wiki_enable_semantic` | 开关语义搜索 |
 | `wiki_generate_embeddings` | 生成向量 |
 | `wiki_list_models` | 模型列表（JSON） |
+
+### Cross-Encoder 精排（默认关闭）
+
+| 工具 | 说明 |
+|------|------|
+| `wiki_configure_reranker` | 显式开关及配置模型、dtype、候选数、长度与 batch 大小 |
+
+`wiki_configure_reranker` 只写入现有 `config.json`，不会立即下载或加载模型。开启后，
+下一次 `wiki_search(mode="hybrid")` 才会对 Hybrid/RRF 的前 `inputTopK` 条候选做
+Cross-Encoder 精排。搜索结果会显示 `reranker` 分数和 `original rank`。
 
 ### 编译（需 API Key）
 

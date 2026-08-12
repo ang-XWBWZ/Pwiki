@@ -6,7 +6,14 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { getIndex } from "./store-index.js";
-import { getEmbeddings, setEmbeddings, getChunkInfo, setChunkInfo } from "./store-vectors.js";
+import {
+  computeCentroid,
+  getEmbeddings,
+  setEmbeddings,
+  getChunkInfo,
+  setChunkInfo,
+  setVectorData,
+} from "./store-vectors.js";
 import { getCurrentModel } from "./model-registry.js";
 import { initialize, isAvailable, embed } from "./embedder.js";
 import { extractChunks } from "./indexer-embed.js";
@@ -14,6 +21,19 @@ import { buildEmbeddingText, buildFileLLMEmbeddingText } from "./semantic-compil
 import type { CompiledChunk, RawChunk, FileSegment, ChunkInfo, FileLLMData, CompiledFileRecord } from "./types.js";
 import type { PreprocessedChunk } from "./preprocessor.js";
 import { updateFileState, computeMD5, getCompiledFilePath, ensureCompiledDir } from "./file-manifest.js";
+import {
+  readSourceIndex,
+  sourceIndexExists,
+  sourceRefForPath,
+} from "./source-shard.js";
+import {
+  bm25StatsFromIndex,
+  buildBm25Index,
+  hasBm25Index,
+  upsertBm25Document,
+  writeBm25Index,
+} from "./bm25.js";
+import { writeBm25Stats } from "./store-index.js";
 
 /**
  * 鑾峰彇鎵€鏈夊凡绱㈠紩鏂囦欢鐨勫師濮嬪潡锛堜緵 AI 缂栬瘧锛? */
@@ -200,6 +220,7 @@ export async function storeFileLLMVector(
   relPath: string,
   llmData: FileLLMData,
   llmModel?: string,
+  expectedSourceMD5?: string,
 ): Promise<boolean> {
   if (!isAvailable()) {
     const ok = await initialize();
@@ -207,8 +228,11 @@ export async function storeFileLLMVector(
   }
 
   const fullPath = resolve(sourceDir, relPath);
+  const source = sourceRefForPath(sourceDir);
+  const sourceId = sourceIndexExists(source.id) ? source.id : undefined;
   let currentMD5 = "";
   try { currentMD5 = computeMD5(readFileSync(fullPath, "utf-8")); } catch { return false; }
+  if (expectedSourceMD5 && currentMD5 !== expectedSourceMD5) return false;
 
   const model = getCurrentModel();
   const maxEmbedLen = Math.floor(model.maxTokens * 2);
@@ -216,9 +240,14 @@ export async function storeFileLLMVector(
   let vec: number[];
   try { vec = await embed(embeddingText); } catch { return false; }
 
+  // LLM/embedding 运行期间正文可能被编辑；不能把旧结果挂到新正文 hash 上。
+  try {
+    if (computeMD5(readFileSync(fullPath, "utf-8")) !== currentMD5) return false;
+  } catch { return false; }
+
   // 清除该文件所有旧 LLM 向量（支持多段: ###llm, ###llm0...），不删除 AST chunks (###0, ###1...)
-  const existing = getEmbeddings();
-  const chunkInfo = getChunkInfo();
+  const existing = getEmbeddings(sourceId);
+  const chunkInfo = getChunkInfo(sourceId);
   for (const key of Object.keys(existing)) {
     if (key.startsWith(relPath + "###llm")) {
       delete existing[key];
@@ -245,23 +274,49 @@ export async function storeFileLLMVector(
   writeFileSync(compiledFile, JSON.stringify(record, null, 2), "utf-8");
 
   const astChunks = await extractChunks(fullPath, relPath, "", maxEmbedLen);
+  // 先持久化向量，再发布 manifest 状态；失败时搜索仍会屏蔽旧快照。
+  setVectorData({
+    model: model.hfRepo,
+    dim: model.dim,
+    entries: existing,
+    chunkInfo,
+    centroid: computeCentroid(existing) ?? undefined,
+  }, sourceId);
   updateFileState(relPath, {
-    md5: currentMD5, astChunkCount: astChunks.length,
+    md5: currentMD5, llmCompiledMd5: currentMD5, astChunkCount: astChunks.length,
     astIndexedAt: new Date().toISOString(),
     llmCompiled: true, llmCompiledAt: new Date().toISOString(),
-  });
+    hasSemanticVectors: true,
+  }, sourceId);
 
-  // model already obtained above
-  setEmbeddings(existing, model.hfRepo, model.dim);
-  setChunkInfo(chunkInfo);
-
-  // BM25 倒排索引重建（包含 LLM topic/concepts/aliases 字段）
+  // 仅更新当前文档的 BM25 投递（包含 LLM topic/concepts/aliases 字段）。
   try {
-    const { buildBm25Index, writeBm25Index, buildBm25Stats } = await import("./bm25.js");
-    const { writeBm25Stats } = await import("./store-index.js");
-    const index = buildBm25Index();
-    writeBm25Index(index);
-    writeBm25Stats(buildBm25Stats());
+    const entry = sourceId
+      ? readSourceIndex(sourceId)[relPath]
+      : getIndex()[relPath];
+    if (!entry) return true;
+    if (sourceId) {
+      if (!hasBm25Index(sourceId)) {
+        writeBm25Index(
+          buildBm25Index(Object.values(readSourceIndex(sourceId)), sourceId),
+          sourceId,
+        );
+      } else {
+        upsertBm25Document(
+          buildBm25Index([entry], sourceId),
+          entry.relPath,
+          sourceId,
+        );
+      }
+    } else {
+      if (!hasBm25Index()) {
+        const index = buildBm25Index();
+        writeBm25Index(index);
+        writeBm25Stats(bm25StatsFromIndex(index));
+      } else {
+        upsertBm25Document(buildBm25Index([entry]), entry.relPath);
+      }
+    }
   } catch { /* ignore */ }
 
   return true;

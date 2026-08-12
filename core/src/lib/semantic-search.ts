@@ -6,7 +6,15 @@ import { getSemanticEnabled } from "./store-config.js";
 import { getIndex } from "./store-index.js";
 import { embed, initialize, isAvailable, cosineSimilarity } from "./embedder.js";
 import { keywordSearch, keywordCandidates } from "./search.js";
-import type { SearchHit, SearchCandidate, ChunkInfo } from "./types.js";
+import { pathMatchesPrefix, readSourceIndex } from "./source-shard.js";
+import { getManifest } from "./file-manifest.js";
+import type {
+  SearchHit,
+  SearchCandidate,
+  ChunkInfo,
+  FileEntry,
+  SearchShardScope,
+} from "./types.js";
 
 const HIGH_SIMILARITY_THRESHOLD = 0.50;
 const MIN_SIMILARITY_THRESHOLD = 0.20;
@@ -26,21 +34,25 @@ interface FileMatch {
   bestChunk: ChunkMatch; chunkCount: number; chunkHeadings: string[];
 }
 
-export async function semanticSearch(query: string): Promise<SearchHit[]> {
+export async function semanticSearch(
+  query: string,
+  scope?: SearchShardScope,
+): Promise<SearchHit[]> {
   if (!getSemanticEnabled()) return [];
   if (!isAvailable()) { const ok = await initialize(); if (!ok) return []; }
 
-  const embeddings = getEmbeddings();
+  const embeddings = getEmbeddings(scope?.sourceId);
   if (Object.keys(embeddings).length === 0) return [];
 
-  const idx = getIndex();
-  const chunkInfo = getChunkInfo();
+  const idx = scope ? readSourceIndex(scope.sourceId) : getIndex();
+  const chunkInfo = getChunkInfo(scope?.sourceId);
+  const manifest = getManifest(scope?.sourceId);
 
   let queryVec: number[];
   try { queryVec = await embed(query); } catch { return []; }
 
   // 减去全局质心（降噪），α=0.3，然后归一化
-  const centroid = getCentroid();
+  const centroid = getCentroid(scope?.sourceId);
   if (centroid && centroid.length === queryVec.length) {
     const alpha = 0.3;
     for (let i = 0; i < queryVec.length; i++) {
@@ -61,6 +73,8 @@ export async function semanticSearch(query: string): Promise<SearchHit[]> {
     const rawIdx = chunkMatch ? parseInt(chunkMatch[2], 10) : NaN;
     const chunkIdx = isNaN(rawIdx) ? undefined : rawIdx;
     if (!idx[relPath]) continue;
+    if (manifest.files[relPath] && !manifest.files[relPath].hasSemanticVectors) continue;
+    if (scope && !pathMatchesPrefix(relPath, scope.pathPrefix)) continue;
     const similarity = cosineSimilarity(queryVec, vec);
     if (similarity < MIN_SIMILARITY_THRESHOLD) continue;
     const ci = chunkIdx !== undefined ? chunkInfo[key] : undefined;
@@ -95,15 +109,15 @@ export async function semanticSearch(query: string): Promise<SearchHit[]> {
 
   const files = [...fileMap.values()].sort((a, b) => b.semanticScore - a.semanticScore);
   const strong = files.filter(f => f.semanticScore >= HIGH_SIMILARITY_THRESHOLD);
-  const ci = getChunkInfo();
-  const strongHits = strong.map(f => makeFileHit(f, idx, ci));
+  const ci = getChunkInfo(scope?.sourceId);
+  const strongHits = strong.map(f => makeFileHit(f, idx, ci, scope?.sourceId));
 
   if (strongHits.length < FALLBACK_COUNT) {
     const weak = files
       .filter(f => f.semanticScore < HIGH_SIMILARITY_THRESHOLD)
       .slice(0, FALLBACK_COUNT);
     const weakHits = weak.map(f => {
-      const hit = makeFileHit(f, idx, ci);
+      const hit = makeFileHit(f, idx, ci, scope?.sourceId);
       hit.snippet = `⚠️ 弱匹配 (${Math.round(f.semanticScore * 100)}%)`;
       return hit;
     });
@@ -114,8 +128,9 @@ export async function semanticSearch(query: string): Promise<SearchHit[]> {
 
 function makeFileHit(
   f: FileMatch,
-  idx: Record<string, import("./types.js").FileEntry>,
+  idx: Record<string, FileEntry>,
   chunkInfo?: Record<string, ChunkInfo>,
+  sourceId?: string,
 ): SearchHit {
   const entry = idx[f.relPath]!;
   let snippet = "";
@@ -136,6 +151,7 @@ function makeFileHit(
       : ` | +${f.chunkCount - 1}块命中`;
   }
   return {
+    sourceId,
     relPath: entry.relPath, sourceDir: entry.sourceDir,
     title: entry.title, tags: entry.tags, snippet,
     score: Math.round(f.semanticScore * 100),
@@ -148,9 +164,16 @@ function makeFileHit(
   };
 }
 
-export async function hybridSearch(query: string): Promise<SearchHit[]> {
-  const candidates = await hybridCandidates(query, { kwTopK: RRF_TOPN, semTopK: RRF_TOPN });
-  return candidatesToHits(candidates);
+export async function hybridSearch(
+  query: string,
+  scope?: SearchShardScope,
+): Promise<SearchHit[]> {
+  const candidates = await hybridCandidates(
+    query,
+    { kwTopK: RRF_TOPN, semTopK: RRF_TOPN },
+    scope,
+  );
+  return candidatesToHits(candidates, scope);
 }
 
 // ═══════════════ 候选层（供 hybrid 融合，不经展示阈值过滤） ═══════════════
@@ -173,21 +196,23 @@ interface HybridCandidateOptions {
 export async function semanticCandidates(
   query: string,
   opts: SemanticCandidateOptions = {},
+  scope?: SearchShardScope,
 ): Promise<SearchCandidate[]> {
   if (!getSemanticEnabled()) return [];
   if (!isAvailable()) { const ok = await initialize(); if (!ok) return []; }
 
-  const embeddings = getEmbeddings();
+  const embeddings = getEmbeddings(scope?.sourceId);
   if (Object.keys(embeddings).length === 0) return [];
 
-  const idx = getIndex();
-  const chunkInfo = getChunkInfo();
+  const idx = scope ? readSourceIndex(scope.sourceId) : getIndex();
+  const chunkInfo = getChunkInfo(scope?.sourceId);
+  const manifest = getManifest(scope?.sourceId);
 
   let queryVec: number[];
   try { queryVec = await embed(query); } catch { return []; }
 
   // 质心降噪
-  const centroid = getCentroid();
+  const centroid = getCentroid(scope?.sourceId);
   if (centroid && centroid.length === queryVec.length) {
     const alpha = 0.3;
     for (let i = 0; i < queryVec.length; i++) queryVec[i] -= alpha * centroid[i];
@@ -207,6 +232,8 @@ export async function semanticCandidates(
     const rawIdx = chunkMatch ? parseInt(chunkMatch[2], 10) : NaN;
     const chunkIdx = isNaN(rawIdx) ? undefined : rawIdx;
     if (!idx[relPath]) continue;
+    if (manifest.files[relPath] && !manifest.files[relPath].hasSemanticVectors) continue;
+    if (scope && !pathMatchesPrefix(relPath, scope.pathPrefix)) continue;
 
     const similarity = cosineSimilarity(queryVec, vec);
     if (similarity < minSim) continue;
@@ -233,6 +260,7 @@ export async function semanticCandidates(
     const score = Math.round((fm.bestScore + bonus) * 100);
     const meta = bestMeta.get(relPath);
     candidates.push({
+      sourceId: scope?.sourceId,
       relPath, title: idx[relPath]?.title ?? "",
       score, source: "semantic",
       chunkIndex: fm.bestChunk, chunkHeading: fm.bestHeading,
@@ -254,12 +282,17 @@ export async function semanticCandidates(
 export async function hybridCandidates(
   query: string,
   opts: HybridCandidateOptions = {},
+  scope?: SearchShardScope,
 ): Promise<SearchCandidate[]> {
   const kwTopK = opts.kwTopK ?? RRF_TOPN;
   const semTopK = opts.semTopK ?? RRF_TOPN;
 
-  const kwHits = keywordCandidates(query, { topK: kwTopK });
-  const semHits = await semanticCandidates(query, { topK: semTopK, minScore: -1, includeWeak: true });
+  const kwHits = keywordCandidates(query, { topK: kwTopK }, scope);
+  const semHits = await semanticCandidates(
+    query,
+    { topK: semTopK, minScore: -1, includeWeak: true },
+    scope,
+  );
 
   const kwRank = new Map<string, number>();
   kwHits.forEach((h, i) => kwRank.set(h.relPath, i + 1));
@@ -280,10 +313,12 @@ export async function hybridCandidates(
     const rrf = 1 / (RRF_K + kwR) + 1 / (RRF_K + semR);
     const base: SearchCandidate = sem || kw!;
     merged.push({
+      sourceId: scope?.sourceId,
       relPath: base.relPath, title: base.title,
       score: Math.round(rrf * 10000), source: "hybrid",
       chunkKey: sem?.chunkKey, chunkIndex: sem?.chunkIndex, chunkHeading: sem?.chunkHeading,
       semanticScore: sem?.semanticScore,
+      keywordEvidence: kw?.keywordEvidence,
       headingPath: sem?.headingPath, startLine: sem?.startLine, endLine: sem?.endLine,
       snippet: sem?.chunkHeading || kw?.snippet,
     });
@@ -292,11 +327,15 @@ export async function hybridCandidates(
 }
 
 /** 候选转展示用 SearchHit */
-function candidatesToHits(candidates: SearchCandidate[]): SearchHit[] {
-  const idx = getIndex();
+function candidatesToHits(
+  candidates: SearchCandidate[],
+  scope?: SearchShardScope,
+): SearchHit[] {
+  const idx = scope ? readSourceIndex(scope.sourceId) : getIndex();
   return candidates.map(c => {
     const entry = idx[c.relPath];
     return {
+      sourceId: c.sourceId,
       relPath: c.relPath,
       sourceDir: entry?.sourceDir ?? "",
       title: c.title || (entry?.title ?? ""),
@@ -309,6 +348,7 @@ function candidatesToHits(candidates: SearchCandidate[]): SearchHit[] {
       headingPath: c.headingPath,
       startLine: c.startLine,
       endLine: c.endLine,
+      keywordEvidence: c.keywordEvidence,
     };
   });
 }

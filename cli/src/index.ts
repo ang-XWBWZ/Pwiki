@@ -6,8 +6,11 @@ import { readFileSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
-import { WikiEngine, MODELS, findModel } from "@llangtop/pwiki-core";
-import type { SearchMode } from "@llangtop/pwiki-core";
+import {
+  WikiEngine, MODELS, findModel,
+  setRerankerConfig,
+} from "@llangtop/pwiki-core";
+import type { RerankerConfig, SearchMode } from "@llangtop/pwiki-core";
 
 // Console encoding fix for Windows
 if (process.platform === "win32") {
@@ -49,6 +52,8 @@ program
   .description("Search the wiki")
   .option("-k, --keyword", "Keyword only")
   .option("-s, --semantic", "Semantic only")
+  .option("--source <source>", "Source ID, unique name, or path")
+  .option("--path-prefix <path>", "Source-relative directory or file (requires --source)")
   .option("-p, --page <n>", "Page number", "1")
   .option("-f, --full", "Full content (5 per page)")
   .action(async (query: string, opts: any) => {
@@ -56,7 +61,16 @@ program
     if (opts.keyword) mode = "keyword";
     else if (opts.semantic) mode = "semantic";
 
-    const hits = await engine().search(query, mode);
+    let hits;
+    try {
+      hits = await engine().search(query, mode, {
+        source: opts.source,
+        pathPrefix: opts.pathPrefix,
+      });
+    } catch (error: any) {
+      console.error(`Search failed: ${error?.message ?? String(error)}`);
+      return;
+    }
     if (!hits.length) { console.log(`No results for "${query}" (${mode})`); return; }
 
     const limit = opts.full ? 5 : 10;
@@ -70,7 +84,7 @@ program
       const h = pageHits[i];
       const tags = h.tags.length ? ` [${h.tags.join(", ")}]` : "";
       console.log(`${i + 1}. ${h.title}${tags}`);
-      console.log(`   ${h.relPath}`);
+      console.log(`   ${h.relPath}${h.sourceId ? ` [source: ${h.sourceId}]` : ""}`);
       if (h.snippet) {
         for (const line of h.snippet.split("\n").slice(0, 3)) {
           if (line.trim()) console.log(`   ${line}`);
@@ -125,8 +139,9 @@ program
 program
   .command("read <path>")
   .description("Read a wiki entry's full content")
-  .action((path: string) => {
-    const result = engine().readEntry(path);
+  .option("--source <source>", "Source ID, unique name, or path")
+  .action((path: string, opts: any) => {
+    const result = engine().readEntry(path, opts.source);
     if (!result) { console.log(`Not found: ${path}`); return; }
     console.log(`# ${result.entry.title}\n`);
     console.log(result.content);
@@ -155,14 +170,17 @@ program
     console.log(`Sources:    ${s.sources.length}`);
     console.log(`Files:      ${s.files}`);
     console.log(`Semantic:   ${s.semantic ? "ON" : "OFF"}`);
+    console.log(`Reranker:   ${s.reranker.enabled ? `ON (${s.reranker.model}, ${s.reranker.dtype}${s.reranker.loaded ? ", loaded" : ""})` : "OFF"}`);
     console.log(`Embeddings: ${s.embeddings}`);
     console.log(`Centroid:   ${s.centroid ? "yes" : "no"}`);
     console.log(`Compiled:   ${s.compiled}`);
     console.log(`Model:      ${s.model} (${s.modelDim}d)`);
     console.log(`Last scan:  ${s.lastScan || "never"}`);
     if (s.sources.length) {
-      console.log("\nSources:");
-      s.sources.forEach((src: string, i: number) => console.log(`  ${i + 1}. ${src}`));
+      console.log("\nSource shards:");
+      engine().sourceRefs.forEach((source, i) => {
+        console.log(`  ${i + 1}. ${source.id}  ${source.path}`);
+      });
     }
   });
 
@@ -186,6 +204,56 @@ program
       return;
     }
     console.log("OK " + result.msg);
+  });
+
+program
+  .command("reranker <state>")
+  .description("Enable/disable optional Cross-Encoder reranking for hybrid search")
+  .option("-m, --model <id>", "Cross-Encoder model identifier")
+  .option("--dtype <dtype>", "Model dtype: int8, fp16, or fp32")
+  .option("--input-top-k <n>", "Candidates sent to the reranker")
+  .option("--output-top-k <n>", "Final results retained after reranking")
+  .option("--max-length <n>", "Maximum paired token length")
+  .option("--batch-size <n>", "Paired inputs per inference batch")
+  .action((state: string, opts: any) => {
+    if (state !== "on" && state !== "off") {
+      console.error("State must be 'on' or 'off'.");
+      process.exitCode = 1;
+      return;
+    }
+
+    const parsePositiveInt = (name: string, value: unknown): number | undefined => {
+      if (value === undefined) return undefined;
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+        throw new Error(`${name} must be a positive integer`);
+      }
+      return parsed;
+    };
+
+    try {
+      // 先初始化 Engine，确保 --dir 与其它 CLI 子命令使用同一 config.json。
+      engine();
+      const patch: Partial<RerankerConfig> = { enabled: state === "on" };
+      if (opts.model !== undefined) patch.model = opts.model;
+      if (opts.dtype !== undefined) patch.dtype = opts.dtype;
+      const inputTopK = parsePositiveInt("--input-top-k", opts.inputTopK);
+      const outputTopK = parsePositiveInt("--output-top-k", opts.outputTopK);
+      const maxLength = parsePositiveInt("--max-length", opts.maxLength);
+      const batchSize = parsePositiveInt("--batch-size", opts.batchSize);
+      if (inputTopK !== undefined) patch.inputTopK = inputTopK;
+      if (outputTopK !== undefined) patch.outputTopK = outputTopK;
+      if (maxLength !== undefined) patch.maxLength = maxLength;
+      if (batchSize !== undefined) patch.batchSize = batchSize;
+      const config = setRerankerConfig(patch);
+      console.log(`Reranker ${config.enabled ? "ON" : "OFF"}: ${config.model} (${config.dtype})`);
+      if (config.enabled) {
+        console.log("The model is lazy-loaded on the first hybrid search.");
+      }
+    } catch (error) {
+      console.error(`Reranker configuration failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
   });
 
 program
@@ -234,7 +302,7 @@ program
       return;
     }
     if (!path) { console.log("Usage: pwiki compile <path> | pwiki compile --all"); return; }
-    const r = await engine().compileFile(path, compileOpts);
+    const r = await engine().compileFile(path, { ...compileOpts, source: opts?.source });
     console.log(r.msg);
   });
 

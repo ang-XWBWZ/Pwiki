@@ -1,7 +1,53 @@
 // types.ts — Wiki 共享类型 (v1.3)
 
+import type { TokenSource } from "./analyzer/types.js";
+
 /** 搜索模式 */
 export type SearchMode = "keyword" | "semantic" | "hybrid";
+
+/** Cross-Encoder 精排使用的模型精度。 */
+export type RerankerDType = "int8" | "fp16" | "fp32";
+
+/** Cross-Encoder 精排配置。默认关闭，避免影响现有搜索路径。 */
+export interface RerankerConfig {
+  enabled: boolean;
+  /** 逻辑模型名；运行时可映射到兼容的 ONNX 发行仓库。 */
+  model: string;
+  dtype: RerankerDType;
+  inputTopK: number;
+  outputTopK: number;
+  maxLength: number;
+  batchSize: number;
+}
+
+export const DEFAULT_RERANKER_CONFIG: RerankerConfig = {
+  enabled: false,
+  model: "BAAI/bge-reranker-base",
+  dtype: "int8",
+  inputTopK: 20,
+  outputTopK: 10,
+  maxLength: 512,
+  batchSize: 8,
+};
+
+/** 已注册的数据源 */
+export interface SourceRef {
+  id: string;
+  name: string;
+  path: string;
+}
+
+/** 搜索边界。pathPrefix 只能与 source 一起使用。 */
+export interface SearchScope {
+  source?: string;
+  pathPrefix?: string;
+}
+
+/** 内部检索边界；source 已解析为稳定分片 ID。 */
+export interface SearchShardScope {
+  sourceId: string;
+  pathPrefix?: string;
+}
 
 /** 索引中的单个文件条目 */
 export interface FileEntry {
@@ -88,7 +134,24 @@ export interface CompiledFileRecord {
 }
 
 /** 搜索结果 */
+export interface KeywordTermEvidence {
+  term: string;
+  queryWeight: number;
+  documentWeight: number;
+  lexicalWeight: number;
+  fields: string[];
+  querySources: TokenSource[];
+  documentSources: TokenSource[];
+  contribution: number;
+}
+
+export interface KeywordEvidence {
+  score: number;
+  matchedTerms: KeywordTermEvidence[];
+}
+
 export interface SearchHit {
+  sourceId?: string;
   relPath: string;
   sourceDir: string;
   title: string;
@@ -102,10 +165,16 @@ export interface SearchHit {
   headingPath?: string[];
   startLine?: number;
   endLine?: number;
+  keywordEvidence?: KeywordEvidence;
+  /** 精排后的相关性分数；不覆盖原始 hybrid score。 */
+  rerankerScore?: number;
+  /** 候选在精排前的 1-based 排名。 */
+  originalRank?: number;
 }
 
 /** 搜索候选（内部使用，未经展示阈值过滤） */
 export interface SearchCandidate {
+  sourceId?: string;
   relPath: string;
   title: string;
   score: number;
@@ -118,6 +187,7 @@ export interface SearchCandidate {
   headingPath?: string[];
   startLine?: number;
   endLine?: number;
+  keywordEvidence?: KeywordEvidence;
 }
 
 /** 向量存储结构 */
@@ -141,6 +211,18 @@ export interface WikiStatus {
   model: string;
   modelDim: number;
   compiled: number;
+  backgroundVectors: {
+    running: boolean;
+    queued: number;
+    completed: number;
+    failed: number;
+    lastError?: string;
+  };
+  reranker: RerankerConfig & {
+    loaded: boolean;
+    runtimeModel?: string;
+    lastError?: string;
+  };
 }
 
 /** chunk 读取结果 */

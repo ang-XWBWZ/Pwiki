@@ -25,9 +25,11 @@ pwiki search "xxx" -k              # 关键词
 pwiki search "xxx" -s              # 语义
 pwiki search "xxx" -f              # 全文
 pwiki search "xxx" -p 2            # 第 2 页
+pwiki search "xxx" --source <ID> --path-prefix "docs"
 
 # 条目
 pwiki read <路径>                  # 读全文
+pwiki read <路径> --source <ID>    # 精确读取指定源内的同名路径
 pwiki create <源> <文件>.md -t "标题" --tags "a,b"
 
 # 模型

@@ -1,0 +1,13 @@
+term	weight	type
+数据上送	1.50	domain
+上送异常	1.40	domain
+报文解析	1.50	domain
+倒排索引	1.50	domain
+向量检索	1.50	domain
+相关性评价	1.50	domain
+冻结结算	1.50	domain
+费控下发	1.50	domain
+DLMS	1.50	identifier
+COSEM	1.50	identifier
+HLS5	1.50	identifier
+GMAC	1.50	identifier

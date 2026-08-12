@@ -5,11 +5,20 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { getSemanticEnabled } from "./store-config.js";
-import { getEmbeddings, setEmbeddings, getChunkInfo, setChunkInfo, setCentroid } from "./store-vectors.js";
+import {
+  clearCentroid,
+  computeCentroid,
+  getEmbeddings,
+  setEmbeddings,
+  getChunkInfo,
+  setChunkInfo,
+  setCentroid,
+  setVectorData,
+} from "./store-vectors.js";
 import { getCurrentModel } from "./model-registry.js";
 import { initialize, isAvailable, embed } from "./embedder.js";
 import { extractChunksAST } from "./ast-chunker.js";
-import { updateFileState, computeMD5, getFileState, detectFileChange, getManifest } from "./file-manifest.js";
+import { updateFileStates, detectFileChange, getFileState, getManifest } from "./file-manifest.js";
 import type { FileEntry } from "./types.js";
 
 /** 鏍囬琛屾鍒欙紙浠呯敤浜?fallback锛?*/
@@ -144,6 +153,8 @@ export async function extractChunks(
 export async function generateEmbeddings(
   sourceDir: string,
   entries: FileEntry[],
+  sourceId?: string,
+  canCommit?: (relPath: string, md5: string) => boolean,
 ): Promise<number> {
   if (!getSemanticEnabled()) return 0;
 
@@ -155,12 +166,14 @@ export async function generateEmbeddings(
   const model = getCurrentModel();
   const maxEmbedLen = Math.floor(model.maxTokens * 2); // 浼扮畻瀛楃涓婇檺锛堜腑瑗挎贩鍚堜繚瀹堝€硷級
 
-  const existing = getEmbeddings();
-  const chunkInfo = getChunkInfo();
+  const existing = getEmbeddings(sourceId);
+  const chunkInfo = getChunkInfo(sourceId);
 
   let generated = 0;
-  const toEmbed: { key: string; heading: string; level: number; text: string; headingPath?: string[]; chunkTypeHint?: string; wikilinks?: string[]; startLine?: number; endLine?: number; relPath: string; md5: string; chunkCount: number }[] = [];
-
+  const stateUpdates: Array<{
+    relPath: string;
+    patch: Parameters<typeof updateFileStates>[0][number]["patch"];
+  }> = [];
   // 按文件分组，实现文件级 all-or-nothing
   for (const entry of entries) {
     const fullPath = resolve(sourceDir, entry.relPath);
@@ -168,7 +181,7 @@ export async function generateEmbeddings(
     let currentContent: string;
     try { currentContent = readFileSync(fullPath, "utf-8"); } catch { continue; }
 
-    const manifest = getManifest();
+    const manifest = getManifest(sourceId);
     const detection = detectFileChange(entry.relPath, currentContent, manifest);
     if (!detection.changed) continue;
 
@@ -195,9 +208,22 @@ export async function generateEmbeddings(
 
     if (!allOk) continue; // 文件级失败，保留旧 vectors，不更新 manifest
 
-    // 全部成功 → 清理旧数据，原子替换新数据
+    // embedding 计算期间文件可能再次被编辑；旧结果不得覆盖更新后的正文状态。
+    let latestContent: string;
+    try { latestContent = readFileSync(fullPath, "utf-8"); } catch { continue; }
+    if (latestContent !== currentContent) continue;
+    if (canCommit && !canCommit(entry.relPath, detection.currentMd5)) continue;
+
+    const latestState = getFileState(entry.relPath, sourceId);
+    const compiledCurrent = !!latestState?.llmCompiled
+      && (latestState.llmCompiledMd5 ?? latestState.md5) === detection.currentMd5;
+
+    // 全部成功 → 清理旧 AST 数据并替换；仅保留与当前正文匹配的 LLM 向量。
     for (const key of Object.keys(existing)) {
-      if (key === entry.relPath || key.startsWith(`${entry.relPath}###`)) {
+      const isAstVector = key === entry.relPath
+        || new RegExp(`^${escapeRegExp(entry.relPath)}###\\d+$`).test(key);
+      const isStaleLlmVector = !compiledCurrent && key.startsWith(`${entry.relPath}###llm`);
+      if (isAstVector || isStaleLlmVector) {
         delete existing[key];
         delete chunkInfo[key];
       }
@@ -207,10 +233,17 @@ export async function generateEmbeddings(
     generated += chunks.length;
 
     // 更新 manifest md5
-    updateFileState(entry.relPath, {
-      md5: detection.currentMd5,
-      astChunkCount: chunks.length,
-      astIndexedAt: new Date().toISOString(),
+    stateUpdates.push({
+      relPath: entry.relPath,
+      patch: {
+        md5: detection.currentMd5,
+        semanticMd5: detection.currentMd5,
+        astChunkCount: chunks.length,
+        astIndexedAt: new Date().toISOString(),
+        llmCompiled: compiledCurrent,
+        llmCompiledAt: compiledCurrent ? latestState?.llmCompiledAt : undefined,
+        hasSemanticVectors: true,
+      },
     });
   }
 
@@ -224,13 +257,23 @@ export async function generateEmbeddings(
 
   if (generated > 0) {
     const model = getCurrentModel();
-    setEmbeddings(existing, model.hfRepo, model.dim);
-    setChunkInfo(chunkInfo);
+    setVectorData({
+      model: model.hfRepo,
+      dim: model.dim,
+      entries: existing,
+      chunkInfo,
+      centroid: computeCentroid(existing) ?? undefined,
+    }, sourceId);
+    updateFileStates(stateUpdates, sourceId);
   }
 
-  recomputeCentroid();
+  if (generated === 0 && Object.keys(existing).length === 0) clearCentroid(sourceId);
 
   return generated;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
@@ -240,6 +283,7 @@ export async function embedSingleFile(
   sourceDir: string,
   relPath: string,
   title: string,
+  sourceId?: string,
 ): Promise<boolean> {
   if (!getSemanticEnabled()) return false;
 
@@ -256,8 +300,8 @@ export async function embedSingleFile(
 
   try {
     const chunks = await extractChunks(fullPath, relPath, title, maxEmbedLen);
-    const existing = getEmbeddings();
-    const chunkInfo = getChunkInfo();
+    const existing = getEmbeddings(sourceId);
+    const chunkInfo = getChunkInfo(sourceId);
 
     let ok = false;
     for (const ch of chunks) {
@@ -269,9 +313,9 @@ export async function embedSingleFile(
 
     if (ok) {
       const model = getCurrentModel();
-      setEmbeddings(existing, model.hfRepo, model.dim);
-      setChunkInfo(chunkInfo);
-      recomputeCentroid();
+      setEmbeddings(existing, model.hfRepo, model.dim, sourceId);
+      setChunkInfo(chunkInfo, sourceId);
+      recomputeCentroid(sourceId);
     }
     return ok;
   } catch {
@@ -280,15 +324,18 @@ export async function embedSingleFile(
 }
 
 /** 计算全部向量的均值（噪声基底），供语义搜索降噪 */
-export function recomputeCentroid(): void {
-  const embeddings = getEmbeddings();
+export function recomputeCentroid(sourceId?: string): void {
+  const embeddings = getEmbeddings(sourceId);
   const vectors = Object.values(embeddings);
-  if (vectors.length === 0) return;
+  if (vectors.length === 0) {
+    clearCentroid(sourceId);
+    return;
+  }
   const dim = vectors[0].length;
   const centroid = new Array(dim).fill(0);
   for (const vec of vectors) {
     for (let i = 0; i < dim; i++) centroid[i] += vec[i];
   }
   for (let i = 0; i < dim; i++) centroid[i] /= vectors.length;
-  setCentroid(centroid);
+  setCentroid(centroid, sourceId);
 }

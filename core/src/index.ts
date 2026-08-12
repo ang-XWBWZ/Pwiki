@@ -2,6 +2,7 @@
 
 export { WikiEngine } from "./WikiEngine.js";
 export type { EngineConfig } from "./WikiEngine.js";
+export type { BackgroundQueueStatus } from "./lib/background-queue.js";
 
 export { initWikiConfig, setWikiHome, wikiHome } from "./config.js";
 
@@ -14,9 +15,11 @@ export type { ModelInfo } from "./lib/model-registry.js";
 
 // Types
 export type {
-  SearchMode, SearchHit, FileEntry, ChunkInfo,
+  SearchMode, SearchHit, SearchScope, SourceRef, FileEntry, ChunkInfo,
   RawChunk, CompiledChunk, FileSegment, FileLLMData,
   CompiledFileRecord, EmbeddingData, WikiStatus,
+  KeywordEvidence, KeywordTermEvidence,
+  RerankerConfig, RerankerDType,
 } from "./lib/types.js";
 
 // Store
@@ -49,10 +52,21 @@ export {
 export { keywordSearch } from "./lib/search.js";
 export { semanticSearch, hybridSearch } from "./lib/semantic-search.js";
 
+// Optional Cross-Encoder reranking
+export { BgeReranker, rerankerDocumentText } from "./lib/reranker.js";
+export type { Reranker, RerankOptions, RerankerStatus, BgeRerankerDependencies } from "./lib/reranker.js";
+export { getRerankerConfig, setRerankerConfig, validateRerankerConfig } from "./lib/reranker-config.js";
+
 // BM25 & Tokenizer
-export { tokenize } from "./lib/tokenizer.js";
-export { buildBm25Stats, bm25Score, idf, getDocTokens } from "./lib/bm25.js";
-export type { Bm25Stats } from "./lib/bm25.js";
+export { tokenize, analyze, analyzerStatus } from "./lib/tokenizer.js";
+export type {
+  AnalyzeOptions, AnalyzedToken, AnalyzerConfig, Segment, Segmenter,
+  TextAnalyzer, TokenSource,
+} from "./lib/tokenizer.js";
+export {
+  BM25_INDEX_VERSION, buildBm25Stats, bm25Score, idf, getDocTokens,
+} from "./lib/bm25.js";
+export type { Bm25Stats, Bm25Index, Bm25Posting, Bm25TermEntry } from "./lib/bm25.js";
 
 // Indexer
 export { scanDir } from "./lib/indexer-scan.js";

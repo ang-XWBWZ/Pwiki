@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.tsbuildinfo
+*.log
+*.tgz
+.npm/
+coverage/
+
+# Local test/runtime artifacts
+core/src/lib/__tests__/.test-wiki/
+mcp-in.json
+mcp-out.txt
+mcp-raw.txt
+test-mcp.json

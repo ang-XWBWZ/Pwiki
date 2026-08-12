@@ -1,6 +1,6 @@
 {
   "name": "@llangtop/pwiki-core",
-  "version": "1.2.2",
+  "version": "1.3.2",
   "description": "Wiki knowledge base engine — keyword/semantic/hybrid search with local ONNX embeddings",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,27 +13,32 @@
   },
   "files": [
     "dist",
+    "resources",
     "README.md"
   ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "vitest run"
+    "test": "vitest run src"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",
+    "@node-rs/jieba": "^2.0.1",
+    "better-sqlite3": "13.0.2",
     "remark-parse": "^11.0.0",
+    "sharp": "^0.34.5",
     "unified": "^11.0.0",
     "unist-util-visit": "^5.0.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/mdast": "^4.0.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.5.0",
     "vitest": "^4.1.8"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "license": "MIT"
 }

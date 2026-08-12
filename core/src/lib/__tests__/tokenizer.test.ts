@@ -2,16 +2,27 @@
 // vitest 在 core/package.json 中通过 "type": "module" 自动识别 ESM
 
 import { describe, it, expect } from "vitest";
-import { tokenize } from "../tokenizer.js";
+import { analyze, tokenize } from "../tokenizer.js";
 
 describe("tokenizer", () => {
-  describe("中文 2-gram", () => {
+  describe("中文多粒度分词", () => {
     it("双字词", () => {
-      expect(tokenize("变压器")).toEqual(["变压", "压器"]);
+      const tokens = tokenize("变压器");
+      expect(tokens).toContain("变压器");
+      expect(tokens).toContain("变压");
+      expect(tokens).toContain("压器");
     });
 
     it("多字词", () => {
-      expect(tokenize("变压器故障")).toEqual(["变压", "压器", "器故", "故障"]);
+      const tokens = tokenize("变压器故障");
+      expect(tokens).toEqual(expect.arrayContaining(["变压器", "变压", "压器", "器故", "故障"]));
+      const analyzed = analyze("变压器故障");
+      const weight = (term: string) => {
+        const token = analyzed.find(candidate => candidate.normalized === term)!;
+        return token.baseWeight * token.stopwordWeight * token.confidence;
+      };
+      expect(weight("变压器")).toBeGreaterThan(weight("变压"));
+      expect(weight("故障")).toBeGreaterThan(weight("器故"));
     });
 
     it("单字", () => {

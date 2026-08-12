@@ -1,6 +1,9 @@
 // store-cleanup.test.ts — 统一清理单元测试
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { initWikiConfig } from "../../config.js";
 import { getIndex, mergeIndex, readBm25Stats } from "../store-index.js";
 import { setContent, getContent } from "../content-cache.js";
@@ -8,12 +11,16 @@ import { getEmbeddings, setEmbeddings, getChunkInfo, setChunkInfo } from "../sto
 import { getManifest, updateFileState } from "../file-manifest.js";
 import { removeEntryFromAllStores } from "../store-cleanup.js";
 
-// 测试前初始化临时数据目录
-const TEST_HOME = "D:/demo/pi-agent-extensions/Pwiki/core/src/lib/__tests__/.test-wiki";
+let testHome = "";
 
 describe("removeEntryFromAllStores", () => {
   beforeEach(() => {
-    initWikiConfig({ basePath: TEST_HOME });
+    testHome = mkdtempSync(join(tmpdir(), "pwiki-cleanup-"));
+    initWikiConfig({ basePath: testHome });
+  });
+
+  afterEach(() => {
+    rmSync(testHome, { recursive: true, force: true });
   });
 
   it("清理 index 条目", () => {

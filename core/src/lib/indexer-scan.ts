@@ -43,7 +43,7 @@ async function walk(
       if (entry) {
         out.push(entry);
         try {
-          setContent(entry.relPath, readFileSync(full, "utf-8"));
+          setContent(entry.relPath, readFileSync(full, "utf-8"), entry.sourceDir);
         } catch {
           /* skip */
         }

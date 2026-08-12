@@ -8,11 +8,22 @@
 import { getIndex, readBm25Stats } from "./store-index.js";
 import { getContent } from "./content-cache.js";
 import { tokenize } from "./tokenizer.js";
-import { bm25Score, getDocTokens, readBm25Index, searchBm25Index } from "./bm25.js";
+import { bm25Score, getDocTokens, readBm25QueryIndex, searchBm25Index } from "./bm25.js";
 import type { Bm25Stats } from "./bm25.js";
+import {
+  listSourceRefs,
+  pathMatchesPrefix,
+  readSourceIndex,
+  sourceIndexExists,
+} from "./source-shard.js";
 import { resolve } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import type { FileEntry, SearchHit, SearchCandidate } from "./types.js";
+import type {
+  FileEntry,
+  SearchHit,
+  SearchCandidate,
+  SearchShardScope,
+} from "./types.js";
 
 /** BM25 得分缩放因子（使分值落在和旧算法相近的范围） */
 const BM25_SCALE = 10;
@@ -55,7 +66,7 @@ function bm25Snippet(content: string, queryTokens: string[], maxLen = MAX_LINE_L
 
 /** 获取文档内容（缓存优先，磁盘 fallback） */
 function getDocContent(entry: FileEntry): string | null {
-  let content = getContent(entry.relPath);
+  let content = getContent(entry.relPath, entry.sourceDir);
   if (content) return content;
   const fullPath = resolve(entry.sourceDir, entry.relPath);
   if (!existsSync(fullPath)) return null;
@@ -65,27 +76,50 @@ function getDocContent(entry: FileEntry): string | null {
 /**
  * BM25 关键词搜索
  */
-export function keywordSearch(query: string): SearchHit[] {
-  const index = readBm25Index();
-  if (index) return keywordSearchIndex(query, index);
+export function keywordSearch(query: string, scope?: SearchShardScope): SearchHit[] {
+  if (!scope) {
+    const shards = listSourceRefs().filter(source => sourceIndexExists(source.id));
+    if (shards.length > 0) {
+      return shards
+        .flatMap(source => keywordSearch(query, { sourceId: source.id }))
+        .sort((a, b) => b.score - a.score);
+    }
+  }
+  const entries = scope ? readSourceIndex(scope.sourceId) : getIndex();
+  const index = readBm25QueryIndex(query, scope?.sourceId);
+  if (index) return keywordSearchIndex(query, index, entries, scope);
+  if (scope) return keywordSearchLegacy(query, entries, scope);
   const stats = readBm25Stats();
-  return stats ? keywordSearchBm25(query, stats) : keywordSearchLegacy(query);
+  return stats
+    ? keywordSearchBm25(query, stats, entries)
+    : keywordSearchLegacy(query, entries);
 }
 
 /** 倒排索引模式搜索 */
-function keywordSearchIndex(query: string, index: import("./bm25.js").Bm25Index): SearchHit[] {
-  const idx = getIndex();
-  const raw = searchBm25Index(query, index, 200);
+function keywordSearchIndex(
+  query: string,
+  index: import("./bm25.js").Bm25Index,
+  entries: Record<string, FileEntry>,
+  scope?: SearchShardScope,
+): SearchHit[] {
+  const raw = searchBm25Index(
+    query,
+    index,
+    200,
+    scope ? (relPath) => pathMatchesPrefix(relPath, scope.pathPrefix) : undefined,
+  );
   const queryTokens = tokenize(query);
   return raw.map(r => {
-    const entry = idx[r.relPath];
+    const entry = entries[r.relPath];
     if (!entry) return null;
     let snippet = "";
     const rawContent = getDocContent(entry);
     if (rawContent) snippet = bm25Snippet(rawContent, queryTokens);
     return {
+      sourceId: scope?.sourceId,
       relPath: r.relPath, sourceDir: entry.sourceDir,
       title: entry.title, tags: entry.tags, snippet, score: r.score,
+      keywordEvidence: r.keywordEvidence,
     };
   }).filter(Boolean) as SearchHit[];
 }
@@ -93,12 +127,15 @@ function keywordSearchIndex(query: string, index: import("./bm25.js").Bm25Index)
 /**
  * BM25 模式搜索
  */
-function keywordSearchBm25(query: string, stats: Bm25Stats): SearchHit[] {
-  const idx = getIndex();
+function keywordSearchBm25(
+  query: string,
+  stats: Bm25Stats,
+  entries: Record<string, FileEntry>,
+): SearchHit[] {
   const queryTokens = tokenize(query);
   const hits: SearchHit[] = [];
 
-  for (const [relPath, entry] of Object.entries(idx)) {
+  for (const [relPath, entry] of Object.entries(entries)) {
     let score = 0;
 
     // 字段 boost：改用 token 匹配
@@ -139,12 +176,16 @@ function keywordSearchBm25(query: string, stats: Bm25Stats): SearchHit[] {
 /**
  * 旧版降级搜索（bm25_stats.json 不存在时使用）
  */
-function keywordSearchLegacy(query: string): SearchHit[] {
-  const idx = getIndex();
+function keywordSearchLegacy(
+  query: string,
+  entries: Record<string, FileEntry>,
+  scope?: SearchShardScope,
+): SearchHit[] {
   const q = query.toLowerCase();
   const hits: SearchHit[] = [];
 
-  for (const [relPath, entry] of Object.entries(idx)) {
+  for (const [relPath, entry] of Object.entries(entries)) {
+    if (scope && !pathMatchesPrefix(relPath, scope.pathPrefix)) continue;
     let score = 0;
     const parts: string[] = [];
 
@@ -152,7 +193,7 @@ function keywordSearchLegacy(query: string): SearchHit[] {
     if (relPath.toLowerCase().includes(q)) score += 5;
     if (entry.tags.some(t => t.toLowerCase().includes(q))) score += 3;
 
-    let content = getContent(relPath);
+    let content = getContent(relPath, entry.sourceDir);
     if (!content) {
       const fullPath = resolve(entry.sourceDir, relPath);
       if (existsSync(fullPath)) {
@@ -176,6 +217,7 @@ function keywordSearchLegacy(query: string): SearchHit[] {
 
     if (score > 0) {
       hits.push({
+        sourceId: scope?.sourceId,
         relPath: entry.relPath, sourceDir: entry.sourceDir,
         title: entry.title, tags: entry.tags,
         snippet: parts.join("\n"), score,
@@ -216,26 +258,59 @@ interface CandidateOptions {
  * 关键词候选（原始 BM25 结果，无阈值裁剪）
  * 供 hybridCandidates 使用
  */
-export function keywordCandidates(query: string, opts: CandidateOptions = {}): SearchCandidate[] {
-  const index = readBm25Index();
+export function keywordCandidates(
+  query: string,
+  opts: CandidateOptions = {},
+  scope?: SearchShardScope,
+): SearchCandidate[] {
+  if (!scope) {
+    const shards = listSourceRefs().filter(source => sourceIndexExists(source.id));
+    if (shards.length > 0) {
+      const candidates = shards
+        .flatMap(source => keywordCandidates(query, opts, { sourceId: source.id }))
+        .sort((a, b) => b.score - a.score);
+      return opts.topK ? candidates.slice(0, opts.topK) : candidates;
+    }
+  }
+  const entries = scope ? readSourceIndex(scope.sourceId) : getIndex();
+  const index = readBm25QueryIndex(query, scope?.sourceId);
   if (index) {
-    const raw = searchBm25Index(query, index, opts.topK ?? 200);
-    const idx = getIndex();
+    const raw = searchBm25Index(
+      query,
+      index,
+      opts.topK ?? 200,
+      scope ? (relPath) => pathMatchesPrefix(relPath, scope.pathPrefix) : undefined,
+    );
     return raw
-      .filter(r => idx[r.relPath] !== undefined) // 过滤 stale BM25 候选
+      .filter(r => entries[r.relPath] !== undefined) // 过滤 stale BM25 候选
       .map(r => ({
-        relPath: r.relPath, title: "", score: r.score, source: "keyword" as const,
+        sourceId: scope?.sourceId,
+        relPath: r.relPath,
+        title: entries[r.relPath]?.title ?? "",
+        score: r.score,
+        source: "keyword" as const,
+        keywordEvidence: r.keywordEvidence,
       }));
+  }
+  if (scope) {
+    const candidates = keywordSearchLegacy(query, entries, scope).map((hit) => ({
+      sourceId: scope.sourceId,
+      relPath: hit.relPath,
+      title: hit.title,
+      score: hit.score,
+      source: "keyword" as const,
+      snippet: hit.snippet,
+    }));
+    return opts.topK ? candidates.slice(0, opts.topK) : candidates;
   }
   const stats = readBm25Stats();
   if (!stats) return [];
 
   // fallback: 旧版 BM25 扫描
-  const idx = getIndex();
   const queryTokens = tokenize(query);
   const candidates: SearchCandidate[] = [];
 
-  for (const [relPath, entry] of Object.entries(idx)) {
+  for (const [relPath, entry] of Object.entries(entries)) {
     let score = 0;
     const titleLower = entry.title.toLowerCase();
     const tagsLower = entry.tags.map(t => t.toLowerCase());
