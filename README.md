@@ -1,98 +1,331 @@
 # Pwiki
 
-> 本地知识库，BM25 倒排索引 + 语义向量 + RRF 混合搜索，ONNX 本地模型，零云依赖。
+> Local-first Markdown knowledge engine with BM25F, semantic retrieval, RRF hybrid search, Cross-Encoder reranking, MCP, HTTP API and Web management.
 
-https://github.com/ang-XWBWZ/Pwiki
+Pwiki 是一个面向本地 Markdown 知识的检索与管理引擎。
 
-## 安装（npm）
+它提供完整的关键词检索、向量检索、Hybrid Retrieval、Chunk 级读取、知识条目 CRUD、Source 隔离，以及 CLI、MCP、HTTP API 和 Web 多种访问方式。
 
-需要 Node.js 22 或更高版本。推荐直接从 npm 安装 CLI：
+核心搜索默认不依赖云服务，Embedding 与可选 Reranker 均可使用本地 ONNX 模型运行。
 
-```bash
-npm install -g @llangtop/pwiki-cli
-pwiki --version
+---
+
+# Architecture
+
+```text
+                       ┌──────────────────┐
+                       │     Web UI       │
+                       └────────┬─────────┘
+                                │ HTTP
+                       ┌────────▼─────────┐
+                       │    Pwiki API     │
+                       └────────┬─────────┘
+                                │
+        ┌───────────────────────┼──────────────────────┐
+        │                       │                      │
+   ┌────▼─────┐           ┌─────▼────┐          ┌─────▼────┐
+   │   CLI    │           │   MCP    │          │ Node API │
+   └────┬─────┘           └─────┬────┘          └─────┬────┘
+        │                       │                      │
+        └───────────────────────┼──────────────────────┘
+                                ▼
+                    ┌──────────────────────┐
+                    │      WikiEngine      │
+                    │                      │
+                    │ Parser / CRUD        │
+                    │ Source Management    │
+                    │ Search Pipeline      │
+                    │ Index Maintenance    │
+                    └──────────┬───────────┘
+                               │
+              ┌────────────────┼─────────────────┐
+              ▼                ▼                 ▼
+        BM25 SQLite       Vector Store       Manifest
 ```
 
-如果需要让 Claude、Cursor 等 MCP 客户端接入，再安装 MCP Server：
+当前仓库由五个 workspace 组成：
 
-```bash
-npm install -g @llangtop/pwiki-mcp
+```text
+Pwiki/
+├── core/
+├── cli/
+├── mcp/
+├── api/
+└── webpage/
 ```
 
-`@llangtop/pwiki-core` 是供 Node.js 项目使用的底层库，一般不需要单独全局安装。
+| Package                   | Purpose                        |
+| ------------------------- | ------------------------------ |
+| `@llangtop/pwiki-core`    | 核心索引、检索、Source 与 Markdown CRUD |
+| `@llangtop/pwiki-cli`     | 命令行客户端                         |
+| `@llangtop/pwiki-mcp`     | MCP Server                     |
+| `@llangtop/pwiki-api`     | HTTP API Adapter               |
+| `@llangtop/pwiki-webpage` | Web 管理端                        |
 
-## 从源码发布（维护者）
+---
 
-Linux 环境可直接使用仓库内的 Bash 脚本发布，不需要 PowerShell：
+# Retrieval Pipeline
 
-```bash
-cd Pwiki
-./publish.sh
+Pwiki 当前支持三种检索模式：
+
+```text
+keyword
+semantic
+hybrid
 ```
 
-脚本会先执行 `npm login` 和 `npm whoami`，然后依次编译并公开发布当前版本的
-`@llangtop/pwiki-core`、`@llangtop/pwiki-cli` 和 `@llangtop/pwiki-mcp`。脚本不会
-自动修改版本号；发布前请先手动更新三个子包的 `package.json` 版本，并确认工作区
-中的代码、README 和锁文件已经准备好。
+默认使用 Hybrid Retrieval。
 
-发布不是原子操作：如果某个包已经成功发布、后续包失败，脚本会立即停止；修复问题
-后重新运行时，已发布的包会提示该版本已存在。
+完整链路：
 
-## 三步上手
-
-```bash
-pwiki setup                        # ① 下载模型 + 启用语义（~130MB，一次）
-pwiki load <笔记目录>               # ② 加载数据源
-pwiki refresh                      # ③ 生成向量 + BM25 索引
+```text
+Query
+ │
+ ├─────────────────────────────┐
+ │                             │
+ ▼                             ▼
+Tokenizer                 Embedding Model
+ │                             │
+ ▼                             ▼
+BM25F Retrieval          Vector Retrieval
+ │                             │
+ └──────────────┬──────────────┘
+                ▼
+          Raw Candidates
+                │
+                ▼
+               RRF
+                │
+                ▼
+       Hybrid Candidate Set
+                │
+        optional│
+                ▼
+        Cross-Encoder
+                │
+                ▼
+            SearchHit[]
 ```
 
-`load` 后关键词搜索立即可用，`refresh` 后语义/混合搜索生效。
+一个重要设计是：
 
-## 搜索模式
+**candidate retrieval 与最终展示阈值分离。**
 
-| 命令 | 模式 | 适用场景 |
-|------|------|------|
-| `pwiki search "关键词"` | **hybrid**（默认）| 日常使用，BM25 + 语义 RRF 融合 |
-| `pwiki search "关键词" -k` | **keyword** | 精确匹配，专有名词、API、命令 |
-| `pwiki search "描述" -s` | **semantic** | 自然语言，同义表达模糊查询 |
-| `pwiki search "xxx" -f` | hybrid + 全文 | 需要看正文时 |
-| `pwiki search "xxx" --source <ID> --path-prefix docs` | 范围检索 | 只搜索指定数据源及源内路径 |
+Semantic 或 Keyword 阶段产生的候选不会因为单路展示阈值提前被丢弃，Hybrid 融合直接使用 raw candidates。
 
-**检索能力**：BM25 倒排索引 + field-weighted BM25F（title 3x / path 2.5x / tags 1.8x），分词支持中文 2-gram + snake_case / camelCase / kebab-case / 路径拆分。
+这样可以避免某个单独 Retriever 认为“分数不够高”的结果，在 RRF 融合之前就永远消失。
 
-`pwiki status` 会列出 source ID。限定 `source` 后只打开该物理分片；
-`path-prefix` 在 BM25 和向量评分前过滤，且无结果时不会回退全局。
+---
 
-## 常用命令
+# BM25 / BM25F
 
-```bash
-pwiki status                       # 状态概览
-pwiki load <目录>                   # 加载数据源
-pwiki unload [目录]                 # 卸载（省略列出已加载）
-pwiki refresh                      # 重扫 + 重建索引/向量
-pwiki read <路径> --source <ID>    # 精确读取指定源内条目
-pwiki create <源目录> <路径>        # 新建条目
+Keyword Retrieval 使用倒排索引。
+
+当前索引数据存储于：
+
+```text
+bm25.sqlite3
 ```
 
-### 语义模型
+而不是查询时扫描全部 Markdown。
 
-```bash
-pwiki setup                        # 下载模型 + 启用语义
-pwiki semantic on|off              # 开关语义搜索
-pwiki models                       # 列出可用嵌入模型
+正常搜索只读取查询 token 对应的 postings。
+
+字段权重：
+
+```text
+title     3.0
+path      2.5
+tags      1.8
+body      1.0
 ```
 
-### Cross-Encoder 精排（可选）
+因此标题、文件路径和标签中的关键词会获得更高权重。
 
-Hybrid 搜索默认只使用 BM25 + 双塔 RRF。精排默认关闭；关闭时不会下载或加载额外模型。
+---
 
-```bash
-pwiki reranker on                  # 开启；模型仍在第一次 hybrid 搜索时才加载
-pwiki reranker off                 # 关闭，恢复原始 Hybrid/RRF 排序
-pwiki reranker on --input-top-k 30 --output-top-k 10 --batch-size 8
+## Engineering-aware Tokenizer
+
+普通 whitespace tokenizer 对代码知识效果很差，因此 Pwiki 对工程文本进行了额外拆分。
+
+支持：
+
+```text
+snake_case
+camelCase
+PascalCase
+kebab-case
+dot.path
+slash/path
 ```
 
-配置保存在既有的 `config.json` 中：
+例如：
+
+```text
+finish_reason
+```
+
+可以产生：
+
+```text
+finish
+reason
+finish_reason
+```
+
+搜索：
+
+```text
+finish reason
+```
+
+仍然可以命中。
+
+例如：
+
+```text
+LLM_API_BASE
+```
+
+搜索：
+
+```text
+api base
+```
+
+也可以匹配。
+
+这对：
+
+* API 参数；
+* Java / TypeScript 标识符；
+* 环境变量；
+* 配置键；
+* 文件路径；
+* 类名；
+* 方法名；
+
+尤其重要。
+
+中文则使用额外的 2-gram 处理以改善短词和连续文本检索。
+
+---
+
+# Semantic Retrieval
+
+Semantic Search 使用 Embedding 对 Chunk 建立向量表示。
+
+默认模型：
+
+```text
+bge-base-zh-v1.5
+```
+
+模型使用本地 ONNX runtime 执行。
+
+初始化：
+
+```bash
+pwiki setup
+```
+
+模型缓存目录：
+
+```text
+~/.pwiki/models
+```
+
+也可以通过：
+
+```text
+WIKI_MODELS_DIR
+```
+
+覆盖。
+
+Semantic Search 可以单独启停：
+
+```bash
+pwiki semantic on
+pwiki semantic off
+```
+
+---
+
+# Hybrid Search
+
+默认搜索模式：
+
+```bash
+pwiki search "query"
+```
+
+等价于：
+
+```text
+BM25 candidates
+       +
+Semantic candidates
+       ↓
+      RRF
+```
+
+RRF 用于融合两套评分空间。
+
+这样不需要直接比较：
+
+```text
+BM25 score
+```
+
+与：
+
+```text
+cosine similarity
+```
+
+这种本身没有统一数值语义的分数。
+
+---
+
+# Cross-Encoder Reranker
+
+Pwiki 支持在 Hybrid Retrieval 后增加可选 Cross-Encoder。
+
+默认关闭。
+
+```bash
+pwiki reranker on
+```
+
+搜索链路变为：
+
+```text
+BM25
+   \
+    → RRF → Top-K candidates → Cross-Encoder → Final results
+   /
+Vector
+```
+
+默认逻辑模型：
+
+```text
+BAAI/bge-reranker-base
+```
+
+运行时使用兼容 ONNX 发行版。
+
+可配置：
+
+```bash
+pwiki reranker on \
+  --input-top-k 30 \
+  --output-top-k 10 \
+  --batch-size 8
+```
+
+配置示例：
 
 ```json
 {
@@ -108,143 +341,969 @@ pwiki reranker on --input-top-k 30 --output-top-k 10 --batch-size 8
 }
 ```
 
-启用后，Pwiki 只将 Hybrid/RRF 的前 `inputTopK` 条候选按批传给 Cross-Encoder，按
-`rerankerScore` 重排后保留前 `outputTopK` 条。默认逻辑模型为
-`BAAI/bge-reranker-base`；运行时使用兼容的 ONNX 发行版
-`onnx-community/bge-reranker-base-ONNX` 的 INT8 文件，并缓存到现有模型目录
-`~/.pwiki/models`（或 `WIKI_MODELS_DIR`）。不在搜索请求中量化模型。`fp16` 与
-`fp32` 可通过 `--dtype` 显式选择；缺少对应 ONNX 文件时搜索会记录明确错误并退回
-原 Hybrid/RRF 排序。
+Reranker 只处理 Hybrid 已经召回的少量候选。
 
-### LLM 编译（可选，提升搜索摘要质量）
+不会对整个知识库执行 Cross-Encoder 推理。
 
-```bash
-pwiki compile-status               # 查看编译状态
-pwiki compile --all -l 10          # 编译 10 篇未编译文件
-pwiki llm                          # 查看 LLM 配置
-```
+模型不可用时，搜索明确退回原始 RRF 排序。
 
-编译产出的 topic / concepts / aliases 自动进入 BM25 索引，搜别名即可命中。
+---
 
-## Web 管理端
+# Chunk-level Retrieval
 
-Pwiki 的 Web 管理端采用与 CLI、MCP 相同的 core 能力，通过 HTTP API 作为平台适配边界：
+Pwiki 的搜索结果不只返回文件。
+
+SearchHit 可以携带：
 
 ```text
-@llangtop/pwiki-core       索引、搜索、Markdown CRUD 和状态
-          ↓
-@llangtop/pwiki-api        /api/v1 HTTP API
-          ↓
-@llangtop/pwiki-webpage    浏览器页面和窗口状态
+sourceId
+relPath
+chunkIndex
+headingPath
+startLine
+endLine
 ```
 
-页面服务会在同一个进程中托管静态页面和 `/api/v1` API，不会把 core、Node 文件系统或
-MCP 子进程打进浏览器 bundle。详细 API 路由、错误边界和 core 适配规范见
-[`api/README.md`](api/README.md)；页面包的实现边界见
-[`webpage/README.md`](webpage/README.md)。
+例如一个搜索结果可以定位到：
 
-### 启动 Web 页面
+```text
+docs/dlms/security.md
+  └── Security Setup
+      └── Invocation Counter
 
-在 `Pwiki` 目录执行：
+lines 138-172
+chunk 7
+```
+
+因此 Agent 不需要：
+
+```text
+search
+↓
+read entire 800-line document
+↓
+自己再次定位
+```
+
+而可以：
+
+```text
+search
+↓
+wiki_read_chunk
+```
+
+或者：
+
+```text
+search
+↓
+wiki_read_context
+```
+
+直接读取命中块及其前后文。
+
+MCP 提供：
+
+```text
+wiki_read_entry
+wiki_read_chunk
+wiki_read_context
+```
+
+这也是 Pwiki 面向 Agent 场景时比较核心的一层。
+
+---
+
+# Source Sharding
+
+Pwiki 支持同时加载多个知识目录。
+
+每个目录注册为一个独立 Source：
+
+```text
+Source
+├── sourceId
+├── rootPath
+├── index
+├── BM25 database
+├── vectors
+└── manifest
+```
+
+数据结构：
+
+```text
+~/.pwiki/
+└── sources/
+    ├── source-A/
+    │   ├── index.json
+    │   ├── bm25.sqlite3
+    │   ├── vectors.json
+    │   └── manifest.json
+    │
+    └── source-B/
+        ├── index.json
+        ├── bm25.sqlite3
+        ├── vectors.json
+        └── manifest.json
+```
+
+搜索可以指定：
+
+```text
+sourceId
+```
+
+以及：
+
+```text
+pathPrefix
+```
+
+例如：
 
 ```bash
-npm install
-npm run build -w @llangtop/pwiki-webpage
-npm run start -w @llangtop/pwiki-webpage -- --port 4317
+pwiki search "authentication" \
+  --source a93d... \
+  --path-prefix protocol/dlms
 ```
 
-打开 [http://127.0.0.1:4317/](http://127.0.0.1:4317/)。本机回环地址默认允许知识库管理；
-如果服务绑定到其他地址，需要显式使用 `--allow-source-management` 才能启用加载、刷新
-和移除本地数据源：
+过滤发生在实际 BM25 / Vector 评分之前。
+
+指定 Source 没有结果时不会回退到其他 Source。
+
+---
+
+# Stable Entry Identity
+
+跨 API / MCP / CLI 操作时，条目使用：
+
+```text
+sourceId + source-relative relPath
+```
+
+进行定位。
+
+而不是把：
+
+```text
+/Users/foo/Documents/wiki/a.md
+```
+
+这样的物理路径暴露为公共对象标识。
+
+HTTP API 同样遵循这个原则。
+
+例如：
+
+```text
+source = 83af...
+path   = protocol/security.md
+```
+
+这也解决了多个 Source 中存在：
+
+```text
+README.md
+```
+
+或：
+
+```text
+index.md
+```
+
+时的路径冲突问题。
+
+---
+
+# Path Boundary
+
+涉及文件写入时，Pwiki 强制 Source 边界。
+
+以下形式不会被接受：
+
+```text
+../outside.md
+../../etc/passwd
+/absolute/path.md
+```
+
+Entry 必须解析到对应 Source 内部。
+
+HTTP API 不直接把底层 `renameEntry()` / `moveEntry()` 的全局路径能力暴露给外部调用者。
+
+所有写操作首先经过 source-aware service 层解析。
+
+---
+
+# Index Lifecycle
+
+Pwiki 的索引不是一次性构建产物。
+
+Markdown 生命周期与索引生命周期保持同步。
+
+支持：
+
+```text
+create
+modify
+rename
+move
+delete
+refresh
+```
+
+例如：
+
+```text
+modify Markdown
+      ↓
+update index entry
+      ↓
+update BM25
+      ↓
+schedule/update embedding
+      ↓
+update manifest
+```
+
+---
+
+## Change Detection
+
+Refresh 使用内容 Hash：
+
+```text
+MD5
+```
+
+检测文件变化，而不是单纯依赖：
+
+```text
+mtime
+```
+
+这样可以避免：
+
+* 文件时间戳被复制工具保留；
+* timestamp 精度不足；
+* 内容变化但 mtime 行为异常；
+
+导致索引没有刷新。
+
+---
+
+# Delete Cleanup
+
+文件删除时会统一清理相关派生数据。
+
+概念上：
+
+```text
+removeEntryFromAllStores()
+```
+
+负责清理：
+
+```text
+index
+cache
+vectors
+chunkInfo
+manifest
+BM25
+```
+
+避免产生：
+
+```text
+Markdown 已删除
+但搜索还能搜到
+```
+
+这种 stale index。
+
+---
+
+# Embedding Atomicity
+
+Embedding 更新采用文件级 all-or-nothing 语义。
+
+一个文件可能产生多个 Chunk：
+
+```text
+document
+├── chunk 0
+├── chunk 1
+├── chunk 2
+└── chunk 3
+```
+
+如果新一轮向量生成过程中失败，不应该出现：
+
+```text
+chunk 0 → new vector
+chunk 1 → new vector
+chunk 2 → old vector
+chunk 3 → old vector
+```
+
+Pwiki 会保留原有文件向量状态，直到整份文件的新向量结果可提交。
+
+这样降低 Hybrid Retrieval 中出现部分新索引、部分旧索引的可能性。
+
+---
+
+# CRUD Consistency
+
+CLI、MCP 与 HTTP 最终共享 WikiEngine 的 CRUD 语义。
+
+包括：
+
+```text
+create
+modify
+rename
+move
+delete
+```
+
+MCP 的相关调用为异步完成：
+
+```text
+await engine.xxx()
+```
+
+返回时需要保证同步索引维护已经完成。
+
+Semantic 后台状态则单独表达：
+
+```text
+queued
+processing
+ready
+failed
+```
+
+而不会把：
+
+```text
+embedding task queued
+```
+
+伪装成：
+
+```text
+vector index ready
+```
+
+---
+
+# LLM Compile
+
+Pwiki 可以选择使用 LLM 对 Markdown 进行结构化知识编译。
+
+基础检索完全不要求启用该功能。
+
+命令：
 
 ```bash
-npm run start -w @llangtop/pwiki-webpage -- \
-  --host 127.0.0.1 --port 4317 --base-path /absolute/path/to/wiki-home \
-  --allow-source-management
+pwiki compile-status
+pwiki compile --all -l 10
+pwiki llm
 ```
 
-只需要 API 时，可以单独启动：
+Compile 可以生成：
+
+```text
+topic
+concepts
+aliases
+...
+```
+
+例如原文只有：
+
+```text
+HLS5
+```
+
+编译信息可能产生：
+
+```text
+High Level Security
+GMAC Authentication
+DLMS HLS
+```
+
+这些 metadata 会重新进入 BM25 索引。
+
+因此：
+
+```text
+原始文本
+    +
+LLM derived metadata
+    ↓
+BM25 searchable fields
+```
+
+LLM 在这里承担的是：
+
+**knowledge enrichment**
+
+而不是替代 Retriever。
+
+---
+
+# CLI
+
+安装：
 
 ```bash
-npm run start -w @llangtop/pwiki-api -- --port 4318
+npm install -g @llangtop/pwiki-cli
 ```
 
-当前 API 默认没有身份认证和 TLS，适合本机或受控内网使用；不要直接把服务暴露到公网。
+要求：
 
-### 页面能力
+```text
+Node.js >= 22
+```
 
-- 左侧 Markdown 文件管理器：按目录展开、文件筛选、加载和切换知识库；
-- `keyword`、`semantic`、`hybrid` 三种搜索模式，搜索结果支持跳转到 Markdown；
-- 搜索历史保存在当前浏览器本地，离开搜索页后查询和结果仍可恢复，最多保留 8 条；
-- 可选的二次精排开关，控制 Hybrid/RRF 结果是否使用 Cross-Encoder 复核；
-- 顶部窗口管理：窗口压缩、堆叠、已打开/未打开页面区分，以及独立的新建工作区；
-- 新工作区显示最近关闭的 Markdown 文件，记录保存在浏览器本地，点击即可恢复；
-- Markdown 阅读、编辑、保存、重命名、移动和删除，右侧同步展示标题大纲与文件属性；
-- 六套 CSS 变量主题：夜幕紫、纸张米白、海湾蓝、松林绿、玫瑰粉和琥珀橙。
+初始化：
 
-搜索历史和最近关闭记录只保存在浏览器 `localStorage`，不会写入 Markdown 文件，也不会
-替代 core 的索引状态；重新打开文件后，页面仍以 API 返回的条目和文件内容为准。
+```bash
+pwiki setup
+```
 
-## 环境变量
+加载 Source：
 
-| 变量 | 用途 |
-|------|------|
-| `WIKI_HOME` | 数据目录（默认 `~/.pwiki`） |
-| `WIKI_MODEL_ID` | 嵌入模型（默认 `bge-base-zh-v1.5`） |
-| `LLM_API_KEY` | LLM 编译 API Key |
-| `LLM_API_BASE` | 自定义 API 地址 |
-| `LLM_MODEL` | 自定义 LLM 模型 |
-| `LLM_JSON_MODE` | 设为 `off` 禁用 `response_format: json_object` |
-| `LLM_THINKING_PARAM` | 设为 `off` 禁用 `thinking` 参数 |
+```bash
+pwiki load ~/documents/wiki
+```
 
-## MCP 工具（AI 客户端接入）
+刷新：
+
+```bash
+pwiki refresh
+```
+
+搜索：
+
+```bash
+pwiki search "BM25"
+```
+
+Keyword：
+
+```bash
+pwiki search "WikiEngine" -k
+```
+
+Semantic：
+
+```bash
+pwiki search "如何定位搜索结果所在段落" -s
+```
+
+状态：
+
+```bash
+pwiki status
+```
+
+读取：
+
+```bash
+pwiki read docs/search.md --source <SOURCE_ID>
+```
+
+创建：
+
+```bash
+pwiki create <source> docs/new-entry.md
+```
+
+---
+
+# MCP Server
+
+安装：
+
+```bash
+npm install -g @llangtop/pwiki-mcp
+```
+
+客户端配置：
 
 ```json
 {
   "pwiki": {
     "command": "pwiki-mcp",
-    "env": { "WIKI_HOME": "/path/to/.pwiki" }
+    "env": {
+      "WIKI_HOME": "/path/to/.pwiki"
+    }
   }
 }
 ```
 
-| 工具 | 说明 |
-|------|------|
-| `wiki_search` | 搜索；可限定 `source` + `pathPrefix` |
-| `wiki_read_entry` | 读全文；建议传回结果中的 `sourceId` |
-| `wiki_read_chunk` | 读指定块 |
-| `wiki_read_context` | 读块及前后文 |
-| `wiki_status` | 状态检查 |
-| `wiki_configure_reranker` | 显式配置 Hybrid 后的可选 Cross-Encoder 精排 |
-| `wiki_load / unload / refresh` | 数据源管理 |
-| `wiki_create_entry / rename_entry / move_entry / modify_entry` | CRUD |
-| `wiki_compile / compile_all / compile_status` | LLM 编译 |
+主要 MCP Tools：
 
-## 索引结构
+```text
+wiki_search
+wiki_read_entry
+wiki_read_chunk
+wiki_read_context
+wiki_status
 
+wiki_load
+wiki_unload
+wiki_refresh
+
+wiki_create_entry
+wiki_modify_entry
+wiki_rename_entry
+wiki_move_entry
+
+wiki_compile
+wiki_compile_all
+wiki_compile_status
+
+wiki_configure_reranker
 ```
+
+典型 Agent 工作流：
+
+```text
+User Question
+      ↓
+wiki_search
+      ↓
+SearchHit
+      ↓
+wiki_read_chunk
+      ↓
+wiki_read_context
+      ↓
+Reasoning
+      ↓
+Answer
+```
+
+而不是一次把整个知识库塞进上下文。
+
+---
+
+# HTTP API
+
+Pwiki 1.3.x 增加 HTTP Adapter。
+
+API prefix：
+
+```text
+/api/v1
+```
+
+主要路由：
+
+| Method | Path                  | Purpose       |
+| ------ | --------------------- | ------------- |
+| GET    | `/api/v1/status`      | Engine 状态     |
+| GET    | `/api/v1/sources`     | Source 列表     |
+| POST   | `/api/v1/sources`     | Load Source   |
+| DELETE | `/api/v1/sources/:id` | Unload Source |
+| GET    | `/api/v1/files`       | 文件树           |
+| GET    | `/api/v1/search`      | 搜索            |
+| GET    | `/api/v1/entry`       | 读取            |
+| POST   | `/api/v1/entries`     | 创建            |
+| PUT    | `/api/v1/entry`       | 修改正文          |
+| PATCH  | `/api/v1/entry/title` | 修改标题          |
+| POST   | `/api/v1/entry/move`  | 移动            |
+| DELETE | `/api/v1/entry`       | 删除            |
+| POST   | `/api/v1/refresh`     | Refresh       |
+| GET    | `/api/v1/models`      | 模型            |
+
+API 直接调用 Core：
+
+```text
+HTTP
+ ↓
+PwikiApiService
+ ↓
+WikiEngine
+```
+
+不会：
+
+```text
+HTTP
+ ↓
+spawn CLI
+```
+
+也不会：
+
+```text
+HTTP
+ ↓
+spawn MCP server
+```
+
+---
+
+# HTTP Contracts
+
+API 层使用显式 DTO 和统一 envelope。
+
+概念形式：
+
+```json
+{
+  "ok": true,
+  "value": {}
+}
+```
+
+错误：
+
+```json
+{
+  "ok": false,
+  "error": {}
+}
+```
+
+同时显式描述：
+
+```text
+source scope
+pagination
+content truncation
+background vector status
+```
+
+应用程序因此无需解析 CLI 文本输出。
+
+---
+
+# Web Management
+
+Webpage 是 HTTP API 的浏览器客户端。
+
+启动：
+
+```bash
+npm install
+
+npm run build -w @llangtop/pwiki-webpage
+
+npm run start \
+  -w @llangtop/pwiki-webpage \
+  -- --port 4317
+```
+
+访问：
+
+```text
+http://127.0.0.1:4317/
+```
+
+Web 当前提供：
+
+* Source / Markdown 文件树；
+* 文件筛选；
+* Markdown 阅读；
+* Markdown 编辑；
+* 保存；
+* 重命名；
+* 移动；
+* 删除；
+* Keyword Search；
+* Semantic Search；
+* Hybrid Search；
+* Cross-Encoder 开关；
+* 搜索历史；
+* Heading Outline；
+* 文件属性；
+* 工作区与窗口状态；
+* 多套 CSS Variable Theme。
+
+搜索历史与最近关闭文件保存在：
+
+```text
+localStorage
+```
+
+不会写入知识源本身。
+
+---
+
+# API / Web Security
+
+当前 API 没有内置：
+
+```text
+authentication
+TLS
+public Internet access control
+```
+
+默认监听：
+
+```text
+127.0.0.1
+```
+
+非 loopback 地址下，Source Management 默认不开放。
+
+需要显式：
+
+```bash
+--allow-source-management
+```
+
+才允许远程加载、刷新或卸载本地 Source。
+
+因此当前设计目标是：
+
+```text
+localhost
+```
+
+或者：
+
+```text
+trusted internal network
+```
+
+公网部署应自行增加：
+
+```text
+Reverse Proxy
+TLS
+Authentication
+Authorization
+Network ACL
+```
+
+---
+
+# Storage Layout
+
+默认数据目录：
+
+```text
+~/.pwiki
+```
+
+结构：
+
+```text
 ~/.pwiki/
 ├── sources/
 │   └── <sourceId>/
 │       ├── index.json
-│       ├── bm25.sqlite3      # 标准未加密 SQLite，BM25 文档与 postings
+│       ├── bm25.sqlite3
 │       ├── vectors.json
 │       └── manifest.json
-├── index.json          # 旧全局索引兼容层
-├── compiled/           # LLM 编译产物
-└── models/             # ONNX 嵌入模型
+│
+├── index.json
+├── compiled/
+└── models/
 ```
 
-1.3.2 首次打开旧索引时会把 v3 的 `bm25_docs.json` / `bm25_terms.json` /
-`bm25_meta.json` 导入 `bm25.sqlite3`；旧 JSON 保留为可回退备份。正常查询只读取
-查询词对应的 postings，新增、编辑、重命名、移动只更新单文档事务。
+其中：
 
-## 子包
+```text
+index.json
+```
 
-| 包 | 用途 |
-|------|------|
-| `@llangtop/pwiki-core` | 搜索引擎库 |
-| `@llangtop/pwiki-api` | Node HTTP API 适配器 |
-| `@llangtop/pwiki-webpage` | 浏览器 Web 管理端 |
-| `@llangtop/pwiki-cli` | 终端命令行 |
-| `@llangtop/pwiki-mcp` | MCP Server |
+保存知识条目 metadata。
+
+```text
+bm25.sqlite3
+```
+
+保存 BM25 文档与 postings。
+
+```text
+vectors.json
+```
+
+保存 Semantic Retrieval 所需向量。
+
+```text
+manifest.json
+```
+
+记录文件 hash 与索引生命周期状态。
+
+```text
+compiled/
+```
+
+保存 LLM Compile 结果。
+
+```text
+models/
+```
+
+保存本地 ONNX 模型。
+
+---
+
+# BM25 SQLite Migration
+
+1.3.2 开始使用：
+
+```text
+bm25.sqlite3
+```
+
+替换早期：
+
+```text
+bm25_docs.json
+bm25_terms.json
+bm25_meta.json
+```
+
+首次打开旧索引时会执行迁移。
+
+旧 JSON 文件暂时保留作为回退数据。
+
+正常查询不再加载完整 terms 文件，而是根据查询词读取对应 postings。
+
+文档新增、修改、重命名和移动也只更新对应文档事务。
+
+---
+
+# Environment Variables
+
+| Variable             | Purpose                          |
+| -------------------- | -------------------------------- |
+| `WIKI_HOME`          | Pwiki 数据目录                       |
+| `WIKI_MODELS_DIR`    | 模型缓存目录                           |
+| `WIKI_MODEL_ID`      | Embedding model                  |
+| `LLM_API_KEY`        | LLM API key                      |
+| `LLM_API_BASE`       | Compatible API endpoint          |
+| `LLM_MODEL`          | Compile model                    |
+| `LLM_JSON_MODE`      | JSON mode compatibility          |
+| `LLM_THINKING_PARAM` | Thinking parameter compatibility |
+
+---
+
+# Development
+
+Clone：
+
+```bash
+git clone https://github.com/ang-XWBWZ/Pwiki
+cd Pwiki
+```
+
+Install：
+
+```bash
+npm install
+```
+
+Build all workspaces：
+
+```bash
+npm run build --workspaces
+```
+
+或者：
+
+```bash
+npm run build
+```
+
+运行 CLI：
+
+```bash
+npm run start -w @llangtop/pwiki-cli
+```
+
+运行 MCP：
+
+```bash
+npm run start -w @llangtop/pwiki-mcp
+```
+
+运行 API：
+
+```bash
+npm run start -w @llangtop/pwiki-api -- --port 4318
+```
+
+运行 Web：
+
+```bash
+npm run start -w @llangtop/pwiki-webpage -- --port 4317
+```
+
+---
+
+# Publishing
+
+当前公开 npm 发布主要包括：
+
+```text
+@llangtop/pwiki-core
+@llangtop/pwiki-cli
+@llangtop/pwiki-mcp
+```
+
+Linux：
+
+```bash
+./publish.sh
+```
+
+发布脚本不会自动修改版本号。
+
+发布前需要同步更新对应：
+
+```text
+package.json
+```
+
+版本。
+
+---
+
+# What Pwiki Is
+
+从 UI 看，Pwiki 的 Web 页面当然很容易让人联想到一个简化版 Markdown / Obsidian 工具。
+
+但 Web 只是整个项目的一种入口。
+
+真正的主体仍然是：
+
+```text
+Markdown Sources
+       ↓
+WikiEngine
+       ↓
+Index / Retrieval / CRUD
+       ↓
+CLI / MCP / HTTP / Web
+```
+
+因此 Pwiki 更接近一个：
+
+> **local knowledge engine shared by humans, agents and applications**
+
+它不会花主要精力追赶成熟笔记软件的插件生态、Canvas、移动端和完整编辑器体验。
+
+Web 的职责是让人类可以直接检查、搜索和维护同一套知识。
+
+MCP 让 Agent 使用它。
+
+HTTP API 让其他软件使用它。
+
+而这些入口最终共享同一个知识核心。
