@@ -5,6 +5,7 @@ export type { EngineConfig } from "./WikiEngine.js";
 export type { BackgroundQueueStatus } from "./lib/background-queue.js";
 
 export { initWikiConfig, setWikiHome, wikiHome } from "./config.js";
+export { normalizeMarkdownRelPath } from "./lib/source-shard.js";
 
 // Model registry
 export {
@@ -15,7 +16,7 @@ export type { ModelInfo } from "./lib/model-registry.js";
 
 // Types
 export type {
-  SearchMode, SearchHit, SearchScope, SourceRef, FileEntry, ChunkInfo,
+  SearchMode, SearchHit, SearchScope, SourceRef, FileEntry, ChunkInfo, ChunkReadResult, ChunkContextResult,
   RawChunk, CompiledChunk, FileSegment, FileLLMData,
   CompiledFileRecord, EmbeddingData, WikiStatus,
   KeywordEvidence, KeywordTermEvidence,

@@ -39,7 +39,8 @@ export function parseFileEntry(
             ...v
               .slice(1, -1)
               .split(",")
-              .map((s) => s.trim().replace(/['"]/g, "")),
+              .map((s) => s.trim().replace(/['"]/g, ""))
+              .filter(Boolean),
           );
         }
       }

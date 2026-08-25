@@ -47,6 +47,7 @@ pwiki llm                          # LLM 配置
 
 # 状态
 pwiki status                       # 数据源 / 向量 / 质心 / 模型
+pwiki info                         # status 的便捷别名
 ```
 
 ## 环境变量

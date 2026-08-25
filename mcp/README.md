@@ -55,6 +55,12 @@ npm i -g @llangtop/pwiki-mcp
 `sourceId` 继续传给 `wiki_read_entry`、`wiki_read_chunk` 或
 `wiki_read_context`。
 
+写入工具也只作用于已加载的数据源。`wiki_create_entry`、`wiki_modify_entry`
+接受 source ID、唯一 source 名称或 source 路径；`wiki_rename_entry` 和
+`wiki_move_entry` 在多个 source 含有同名相对路径时必须传入 source。写入路径
+会统一为小写 `.md`，省略后缀时自动补全；`wiki_refresh` 可直接使用
+`wiki_status` 返回的 source ID。
+
 ### 数据源
 
 | 工具 | 说明 |

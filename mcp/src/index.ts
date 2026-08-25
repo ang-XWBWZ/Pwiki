@@ -3,9 +3,11 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { existsSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import { z } from "zod";
 import { WikiEngine, MODELS, setRerankerConfig } from "@llangtop/pwiki-core";
-import type { SearchMode } from "@llangtop/pwiki-core";
+import type { SearchMode, SourceRef } from "@llangtop/pwiki-core";
 
 function defaultDir(): string {
   return (process.env.HOME || process.env.USERPROFILE || ".") + "/.pwiki";
@@ -16,6 +18,20 @@ const engine = new WikiEngine({
   modelId: process.env.WIKI_MODEL_ID || undefined,
   backgroundEmbeddings: true,
 });
+
+function resolveLoadedSource(selector: string): SourceRef | null {
+  const value = selector.trim();
+  if (!value) return null;
+  const refs = engine.sourceRefs;
+  const direct = refs.find((ref) => ref.id === value || ref.path === resolve(value));
+  if (direct) return direct;
+  const byName = refs.filter((ref) => ref.name === value);
+  return byName.length === 1 ? byName[0] : null;
+}
+
+function sourceFailure(selector: string): ReturnType<typeof text> {
+  return text(`Source not found or ambiguous: ${selector}`);
+}
 
 const SERVER_INSTRUCTIONS = [
   "Pwiki is a local Markdown knowledge-base server.",
@@ -41,6 +57,7 @@ const OPERATION_GUIDE = `# Pwiki operation guide
 - Use \`wiki_load\` to add a source and \`wiki_unload\` to remove one.
 - Use \`wiki_refresh\` after loading a source or when Markdown files change outside Pwiki.
 - Use \`wiki_create_entry\`, \`wiki_modify_entry\`, \`wiki_rename_entry\`, and \`wiki_move_entry\` only for deliberate content changes. BM25 is updated before these tools return; semantic vectors are queued in the background.
+- Write tools only target loaded sources. Source IDs, unique names, and source paths are accepted; rename/move require an explicit source when the relative path is duplicated across sources. Write paths are canonicalized to lower-case \`.md\`.
 
 ## Semantic search and LLM compilation
 
@@ -220,10 +237,18 @@ server.tool(
 server.tool(
   "wiki_load",
   "Load a directory as wiki data source. After loading, call wiki_refresh to enable semantic/hybrid search.",
-  { path: z.string().describe("Absolute directory path") },
+  { path: z.string().min(1).describe("Directory path; relative paths are resolved from the server working directory") },
   async ({ path }) => {
-    if (!engine.addSource(path)) return text(`Already loaded: ${path}`);
-    const count = await engine.loadSource(path);
+    const absolute = resolve(path);
+    try {
+      if (!existsSync(absolute) || !statSync(absolute).isDirectory()) {
+        return text(`Invalid source directory: ${absolute}`);
+      }
+    } catch {
+      return text(`Invalid source directory: ${absolute}`);
+    }
+    if (!engine.addSource(absolute)) return text(`Already loaded: ${path}`);
+    const count = await engine.loadSource(absolute);
     return text(`Loaded ${count} .md files from ${path}`);
   },
 );
@@ -245,10 +270,12 @@ server.tool(
 server.tool(
   "wiki_refresh",
   "Re-scan, rebuild index, and generate semantic embeddings. Required after wiki_load for hybrid/semantic search. Also use after external file changes.",
-  { source: z.string().optional().describe("Source path. Omit to refresh all.") },
+  { source: z.string().min(1).optional().describe("Source ID, unique source name, or source path. Omit to refresh all.") },
   async ({ source }) => {
     if (source) {
-      const count = await engine.loadSource(source);
+      const resolved = resolveLoadedSource(source);
+      if (!resolved) return sourceFailure(source);
+      const count = await engine.loadSource(resolved.path);
       return text(`Refreshed ${source}: ${count} files`);
     }
     const result = await engine.load();
@@ -276,14 +303,19 @@ server.tool(
   "wiki_create_entry",
   "Create a new .md entry in a data source. Auto-generates frontmatter. BM25 updates synchronously; semantic vectors update in the background.",
   {
-    source: z.string().describe("Source directory path"),
-    path: z.string().describe("Relative path for the new file"),
+    source: z.string().min(1).describe("Loaded source ID, unique source name, or source directory path"),
+    path: z.string().min(1).describe("Source-relative Markdown path; .md is added when omitted"),
     title: z.string().optional().describe("Document title"),
     tags: z.array(z.string()).optional().describe("Tags"),
     content: z.string().optional().describe("Body content (after frontmatter)"),
   },
   async ({ source, path, title, tags, content }) => {
-    const result = await engine.createEntry(source, path, title, tags ?? [], content ?? "");
+    const resolved = resolveLoadedSource(source);
+    if (!resolved) return sourceFailure(source);
+    const result = await engine.createEntry(resolved.path, path, title, tags ?? [], content ?? "");
+    if (result.startsWith("source-not-found:")) return sourceFailure(source);
+    if (result.startsWith("invalid-path:")) return text(`Invalid entry path: ${result.slice("invalid-path:".length).trim()}`);
+    if (result.startsWith("write-failed:")) return text(`Failed to create ${path}: ${result.slice("write-failed:".length).trim()}`);
     return text(result.startsWith("exists") ? result : `Created: ${result}.${maintenanceSuffix()}`);
   },
 );
@@ -292,12 +324,15 @@ server.tool(
   "wiki_rename_entry",
   "Rename a wiki entry's title (updates frontmatter). BM25 updates synchronously; semantic vectors update in the background.",
   {
-    path: z.string().describe("Relative path of the entry"),
+    path: z.string().min(1).describe("Relative Markdown path of the entry"),
+    source: z.string().min(1).optional()
+      .describe("Source ID, unique source name, or source path; omit only when the path is unique"),
     title: z.string().describe("New title"),
   },
-  async ({ path, title }) => {
-    const ok = await engine.renameEntry(path, title);
-    return text(ok ? `Renamed ${path} to "${title}".${maintenanceSuffix()}` : `Not found: ${path}`);
+  async ({ path, source, title }) => {
+    if (source !== undefined && !resolveLoadedSource(source)) return sourceFailure(source);
+    const ok = await engine.renameEntry(path, title, source);
+    return text(ok ? `Renamed ${path} to "${title}".${maintenanceSuffix()}` : `Not found or source is ambiguous: ${path}`);
   },
 );
 
@@ -305,12 +340,15 @@ server.tool(
   "wiki_move_entry",
   "Move a wiki entry to a new relative path within the same source. BM25 updates synchronously; semantic vectors update in the background.",
   {
-    path: z.string().describe("Current relative path"),
-    newPath: z.string().describe("New relative path"),
+    path: z.string().min(1).describe("Current relative Markdown path"),
+    newPath: z.string().min(1).describe("New relative Markdown path; .md is added when omitted"),
+    source: z.string().min(1).optional()
+      .describe("Source ID, unique source name, or source path; omit only when the path is unique"),
   },
-  async ({ path, newPath }) => {
-    const ok = await engine.moveEntry(path, newPath);
-    return text(ok ? `Moved ${path} to ${newPath}.${maintenanceSuffix()}` : `Failed: source not found or target exists`);
+  async ({ path, newPath, source }) => {
+    if (source !== undefined && !resolveLoadedSource(source)) return sourceFailure(source);
+    const ok = await engine.moveEntry(path, newPath, source);
+    return text(ok ? `Moved ${path} to ${newPath}.${maintenanceSuffix()}` : `Failed: source not found, source is ambiguous, or target exists`);
   },
 );
 
@@ -318,13 +356,15 @@ server.tool(
   "wiki_modify_entry",
   "Replace a wiki entry's full content. Requires the complete new content including frontmatter. BM25 updates synchronously; semantic vectors update in the background.",
   {
-    source: z.string().describe("Source directory path"),
-    path: z.string().describe("Relative path of the entry"),
+    source: z.string().min(1).describe("Loaded source ID, unique source name, or source directory path"),
+    path: z.string().min(1).describe("Relative Markdown path of the entry"),
     content: z.string().describe("New full content (including frontmatter)"),
   },
   async ({ source, path, content }) => {
-    const ok = await engine.modifyEntry(source, path, content);
-    return text(ok ? `Modified: ${path}.${maintenanceSuffix()}` : `Failed to modify: ${path}`);
+    const resolved = resolveLoadedSource(source);
+    if (!resolved) return sourceFailure(source);
+    const ok = await engine.modifyEntry(resolved.path, path, content);
+    return text(ok ? `Modified: ${path}.${maintenanceSuffix()}` : `Failed to modify: ${path}; entry must already exist in the selected source`);
   },
 );
 

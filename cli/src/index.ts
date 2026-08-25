@@ -2,7 +2,7 @@
 // cli/src/index.ts — Wiki CLI (v1.0)
 
 import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
@@ -43,6 +43,16 @@ function engine(): WikiEngine {
     _engine = new WikiEngine({ basePath: opts.dir });
   }
   return _engine;
+}
+
+function loadedSource(selector: string) {
+  const value = selector.trim();
+  if (!value) return null;
+  const refs = engine().sourceRefs;
+  const direct = refs.find((ref) => ref.id === value || ref.path === resolve(value));
+  if (direct) return direct;
+  const byName = refs.filter((ref) => ref.name === value);
+  return byName.length === 1 ? byName[0] : null;
 }
 
 // ═══════════════ search ═══════════════
@@ -101,6 +111,17 @@ program
   .description("Load a directory as wiki data source")
   .action(async (path: string) => {
     const abs = resolve(path);
+    try {
+      if (!existsSync(abs) || !statSync(abs).isDirectory()) {
+        console.error(`Invalid source directory: ${abs}`);
+        process.exitCode = 1;
+        return;
+      }
+    } catch {
+      console.error(`Invalid source directory: ${abs}`);
+      process.exitCode = 1;
+      return;
+    }
     if (!engine().addSource(abs)) { console.log(`Already loaded: ${abs}`); return; }
     const count = await engine().loadSource(abs);
     console.log(`Loaded ${count} .md files from ${abs}`);
@@ -123,10 +144,16 @@ program
 
 program
   .command("refresh [source]")
-  .description("Re-scan and rebuild index")
+  .description("Re-scan and rebuild index; source accepts an ID, unique name, or path")
   .action(async (source?: string) => {
     if (source) {
-      const count = await engine().loadSource(resolve(source));
+      const resolved = loadedSource(source);
+      if (!resolved) {
+        console.error(`Source not found or ambiguous: ${source}`);
+        process.exitCode = 1;
+        return;
+      }
+      const count = await engine().loadSource(resolved.path);
       console.log(`Refreshed: ${count} files`);
     } else {
       const r = await engine().load();
@@ -155,14 +182,25 @@ program
   .option("--content <text>", "Body content")
   .action(async (source: string, path: string, opts: any) => {
     const tags = opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : [];
-    const result = await engine().createEntry(resolve(source), path, opts.title, tags, opts.content ?? "");
-    console.log(result.startsWith("exists") ? result : `Created: ${result}`);
+    const resolved = loadedSource(source);
+    if (!resolved) {
+      console.error(`Source not found or ambiguous: ${source}`);
+      process.exitCode = 1;
+      return;
+    }
+    const result = await engine().createEntry(resolved.path, path, opts.title, tags, opts.content ?? "");
+    if (result.startsWith("exists")) console.log(result);
+    else if (result.startsWith("source-not-found:") || result.startsWith("invalid-path:") || result.startsWith("write-failed:")) {
+      console.error(result);
+      process.exitCode = 1;
+    } else console.log(`Created: ${result}`);
   });
 
 // ═══════════════ status ═══════════════
 
 program
   .command("status")
+  .alias("info")
   .description("Show wiki status")
   .action(() => {
     const s = engine().status();

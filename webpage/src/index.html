@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="midnight">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#17191e" />
+    <title>pwiki · Markdown workspace</title>
+    <link rel="stylesheet" href="/styles.css?v=workspace-settings" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-topbar">
+        <div class="topbar-brand">
+          <button class="mobile-sidebar-button" id="mobile-sidebar-button" type="button" aria-label="打开文件栏">☰</button>
+          <div class="brand-mark">P</div>
+          <div class="brand-copy">
+            <strong>pwiki</strong>
+            <span>Markdown knowledge workspace</span>
+          </div>
+        </div>
+
+        <div class="tab-strip">
+          <div class="tab-bar" id="tab-bar" aria-label="打开的窗口"></div>
+          <button class="window-manager-button" id="window-manager-button" type="button" title="窗口管理" aria-expanded="false">☷</button>
+          <button class="new-tab-button" id="new-window-button" type="button" title="新建工作区">＋</button>
+          <div class="window-manager-popover hidden" id="window-manager-popover" role="dialog" aria-label="窗口管理">
+            <div id="window-manager-content"></div>
+          </div>
+        </div>
+
+        <div class="topbar-actions">
+          <button class="topbar-icon" id="focus-search" type="button" title="搜索（⌘K）">⌕</button>
+          <div class="theme-control">
+            <button class="theme-button" id="theme-button" type="button" title="切换配色">◒ <span>主题</span></button>
+            <div class="theme-popover hidden" id="theme-popover" role="menu" aria-label="选择配色">
+              <div class="theme-popover-title">界面配色</div>
+              <div class="theme-options" id="theme-options"></div>
+            </div>
+          </div>
+          <div class="status-pill" id="status-pill"><span class="status-dot"></span><span>连接中</span></div>
+        </div>
+      </header>
+
+      <div class="workspace-grid" id="workspace-grid">
+        <nav class="nav-rail" aria-label="工作区工具栏">
+          <div class="rail-group">
+            <button class="rail-button active" type="button" title="文件管理" id="rail-files" data-rail="files">▤</button>
+            <button class="rail-button" type="button" title="搜索" id="rail-search" data-rail="search">⌕</button>
+            <button class="rail-button" type="button" title="书签" data-rail="bookmarks">▱</button>
+          </div>
+          <div class="rail-group rail-bottom">
+            <button class="rail-button" type="button" title="刷新索引" id="rail-refresh">↻</button>
+            <button class="rail-button" type="button" title="选择知识库" id="rail-source">◈</button>
+            <button class="rail-button" type="button" title="设置" id="rail-settings">⚙</button>
+          </div>
+        </nav>
+
+        <div class="source-popover hidden" id="source-popover" role="dialog" aria-label="选择知识库">
+          <div class="source-popover-heading">
+            <div><span class="panel-eyebrow">Repository</span><strong>选择知识库</strong></div>
+            <button class="small-icon-button" id="close-source-popover" type="button" title="关闭">×</button>
+          </div>
+          <label for="source-select">当前知识库</label>
+          <select id="source-select" aria-label="选择知识库"></select>
+          <div class="source-popover-context">
+            <div class="source-popover-summary"><span>当前知识库</span><strong id="source-popover-name">未加载</strong></div>
+            <div class="source-popover-stats">
+              <div class="sidebar-stat"><span>Markdown</span><strong id="file-count">—</strong></div>
+              <div class="sidebar-stat"><span>索引状态</span><strong id="index-state">—</strong></div>
+            </div>
+          </div>
+          <div class="source-popover-meta" id="source-popover-meta">从设置页添加或移除 Markdown 数据源。</div>
+          <div class="source-popover-actions">
+            <button class="secondary-button compact-button" id="source-popover-settings" type="button">管理数据源</button>
+            <button class="load-source-button" id="load-source-button" type="button">加载本地目录</button>
+            <button class="small-icon-button" id="source-popover-refresh" type="button" title="刷新当前知识库">↻</button>
+          </div>
+        </div>
+
+        <aside class="file-sidebar" id="file-sidebar" aria-label="Markdown 文件管理">
+          <div class="sidebar-heading">
+            <div>
+              <span class="panel-eyebrow">Workspace</span>
+              <h1 id="sidebar-heading-title">文件</h1>
+            </div>
+            <div class="sidebar-heading-actions">
+              <button class="small-icon-button" id="toggle-file-sidebar-button" type="button" title="收起文件栏">‹</button>
+              <button class="small-icon-button" id="new-note-button" type="button" title="新建 Markdown 笔记">✎</button>
+              <button class="small-icon-button" id="refresh-button" type="button" title="刷新文件树">↻</button>
+            </div>
+          </div>
+
+          <section class="sidebar-mode-panel" id="file-manager-panel" aria-label="文件管理器">
+            <div class="sidebar-search">
+              <span aria-hidden="true">⌕</span>
+              <input id="file-filter" type="search" placeholder="筛选文件树…" autocomplete="off" />
+              <kbd>⌘P</kbd>
+            </div>
+
+            <div class="tree-toolbar">
+              <span>文件</span>
+              <span class="tree-count" id="tree-count">0</span>
+            </div>
+            <div class="file-tree" id="file-tree" role="tree"></div>
+          </section>
+
+          <section class="sidebar-mode-panel search-sidebar-panel hidden" id="search-sidebar-panel" aria-label="搜索当前知识库">
+            <div class="sidebar-mode-heading">
+              <div><span class="panel-eyebrow">Search</span><strong id="search-heading">搜索当前知识库</strong></div>
+              <div class="search-drawer-meta"><span id="search-meta"></span><button class="small-icon-button" id="close-search-button" type="button" title="返回文件管理">×</button></div>
+            </div>
+            <form class="global-search" id="search-form" role="search">
+              <span aria-hidden="true">⌕</span>
+              <input id="search-input" type="search" placeholder="搜索 Markdown 内容…" autocomplete="off" />
+              <select id="search-mode" aria-label="搜索模式"><option value="hybrid">混合</option><option value="keyword">关键词</option><option value="semantic">语义</option></select>
+              <button class="primary-button compact-button" id="search-submit-button" type="submit">搜索</button>
+            </form>
+            <label class="toggle-row reranker-toggle-row" for="reranker-toggle">
+              <span><strong>二次精排</strong><small id="reranker-state">搜索后使用 Cross-Encoder 复核结果</small></span>
+              <input id="reranker-toggle" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+            </label>
+            <section class="search-history hidden" id="search-history" aria-label="搜索历史">
+              <div class="search-history-heading"><span>搜索历史</span><button class="small-text-button" id="clear-search-history" type="button">清空</button></div>
+              <div class="search-history-list" id="search-history-list"></div>
+            </section>
+            <div id="search-result-list" class="search-result-list"></div>
+          </section>
+
+        </aside>
+
+        <main class="editor-pane">
+          <div class="document-toolbar">
+            <div class="document-location" id="breadcrumb"><span class="muted">选择左侧 Markdown 文件</span></div>
+            <div class="document-actions">
+              <button class="mode-button active" id="preview-mode-button" type="button">阅读</button>
+              <button class="mode-button" id="edit-mode-button" type="button">编辑</button>
+              <button class="primary-button compact-button hidden" id="save-entry-button" type="button">保存</button>
+              <button class="toolbar-more" id="document-more-button" type="button" title="文件操作">•••</button>
+            </div>
+          </div>
+
+          <div class="details-card hidden" id="details-card" role="dialog" aria-label="文件属性"></div>
+
+          <div class="note-scroll">
+            <section class="empty-state" id="empty-state">
+              <div class="empty-mark">✦</div>
+              <span class="panel-eyebrow">Markdown workspace</span>
+              <h2>把知识写进文件里</h2>
+              <p>从左侧打开一篇 Markdown，直接编辑、保存、移动或删除。阅读视图会同步生成右侧大纲。</p>
+              <div class="empty-actions">
+                <button class="primary-button" id="empty-new-button" type="button">新建笔记</button>
+                <button class="secondary-button" id="empty-source-button" type="button">加载知识库</button>
+              </div>
+              <div class="shortcut-row"><kbd>⌘</kbd><kbd>K</kbd><span>全局搜索</span><kbd>N</kbd><span>新建笔记</span><kbd>⌘</kbd><kbd>S</kbd><span>保存</span></div>
+              <section class="recently-closed" id="recently-closed" aria-label="最近关闭">
+                <div class="recently-closed-heading">
+                  <div><span class="panel-eyebrow">Recently closed</span><h3>最近关闭</h3></div>
+                  <button class="small-text-button hidden" id="clear-recently-closed" type="button">清空</button>
+                </div>
+                <div class="recently-closed-list" id="recently-closed-list"></div>
+              </section>
+            </section>
+
+            <article class="note-view hidden" id="entry-view">
+              <header class="note-header">
+                <div class="note-header-main">
+                  <div class="note-path" id="entry-path"></div>
+                  <h2 id="entry-title"></h2>
+                  <div class="tag-row" id="entry-tags"></div>
+                </div>
+                <div class="note-meta" id="entry-meta"></div>
+              </header>
+              <div class="note-divider"></div>
+              <div class="markdown-view" id="markdown-view"></div>
+            </article>
+
+            <section class="editor-view hidden" id="editor-view">
+              <div class="editor-heading">
+                <div>
+                  <div class="note-path" id="editor-path"></div>
+                  <h2>编辑 Markdown</h2>
+                </div>
+                <span class="dirty-indicator" id="dirty-indicator">已加载</span>
+              </div>
+              <textarea id="entry-editor" spellcheck="false" placeholder="# 标题\n\n开始记录…"></textarea>
+              <div class="editor-footer"><span>Markdown 原文 · core 会负责写回与索引更新</span><span id="editor-count">0 字符</span></div>
+            </section>
+          </div>
+        </main>
+
+        <aside class="outline-pane" id="outline-pane" aria-label="笔记大纲">
+          <div class="outline-heading">
+            <div><span class="panel-eyebrow">Navigate</span><h2>大纲</h2></div>
+            <button class="small-icon-button" id="toggle-outline-button" type="button" title="收起大纲">›</button>
+          </div>
+          <div class="outline-list" id="outline-list"></div>
+          <div class="outline-empty" id="outline-empty">打开笔记后，这里会显示 Markdown 标题层级。</div>
+
+        </aside>
+
+        <section class="settings-view hidden" id="settings-view" aria-label="pwiki 设置">
+          <div class="settings-header">
+            <div>
+              <span class="panel-eyebrow">Workspace settings</span>
+              <h1>设置</h1>
+              <p>管理模型服务、Markdown 数据源，并查看当前仓库的索引状态。</p>
+            </div>
+            <div class="settings-header-actions">
+              <button class="secondary-button" id="settings-back-button" type="button">返回工作区</button>
+              <button class="small-icon-button" id="settings-refresh-button" type="button" title="刷新设置">↻</button>
+            </div>
+          </div>
+
+          <div class="settings-scroll">
+            <div class="settings-grid">
+              <section class="settings-card settings-card-wide">
+                <div class="settings-card-heading"><div><span class="panel-eyebrow">Repository overview</span><h2>仓库信息</h2></div><span class="settings-badge" id="settings-storage-badge">本地仓库</span></div>
+                <div class="settings-stat-grid" id="settings-repository-stats"></div>
+                <div class="settings-detail-line"><span>最近扫描</span><strong id="settings-last-scan">—</strong></div>
+                <div class="settings-detail-line"><span>向量队列</span><strong id="settings-vector-state">—</strong></div>
+              </section>
+
+              <section class="settings-card">
+                <div class="settings-card-heading"><div><span class="panel-eyebrow">Embedding service</span><h2>模型服务</h2></div><span class="settings-badge" id="settings-semantic-badge">关键词模式</span></div>
+                <p class="settings-help">选择用于语义索引的嵌入模型。切换模型只保存配置；重新打开或刷新索引后生效。</p>
+                <div class="model-list" id="settings-model-list"></div>
+                <button class="secondary-button settings-action" id="settings-semantic-button" type="button">启用语义服务</button>
+                <div class="settings-action-note" id="settings-model-message"></div>
+              </section>
+
+              <section class="settings-card">
+                <div class="settings-card-heading"><div><span class="panel-eyebrow">LLM compile</span><h2>模型接口</h2></div><span class="settings-badge" id="settings-llm-badge">未配置</span></div>
+                <div class="service-fields">
+                  <div><span>API 地址</span><strong id="settings-llm-base">—</strong></div>
+                  <div><span>默认模型</span><strong id="settings-llm-model">—</strong></div>
+                  <div><span>密钥状态</span><strong id="settings-llm-key">—</strong></div>
+                </div>
+                <p class="settings-help">模型接口沿用服务进程的环境变量配置，不在浏览器中回显密钥。</p>
+              </section>
+
+              <section class="settings-card settings-card-wide">
+                <div class="settings-card-heading"><div><span class="panel-eyebrow">Markdown sources</span><h2>数据源管理</h2></div><span class="settings-badge" id="settings-source-count">0 个</span></div>
+                <form class="settings-source-form" id="settings-source-form">
+                  <input id="settings-source-path" type="text" placeholder="/absolute/path/to/markdown" autocomplete="off" spellcheck="false" />
+                  <button class="primary-button compact-button" type="submit">添加数据源</button>
+                </form>
+                <div class="settings-action-note" id="settings-source-message"></div>
+                <div class="settings-source-list" id="settings-source-list"></div>
+              </section>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <dialog class="modal" id="entry-dialog">
+      <form method="dialog" id="entry-form">
+        <div class="modal-heading"><div><span class="panel-eyebrow">New file</span><h2>新建 Markdown 笔记</h2></div><button class="modal-close" value="cancel" aria-label="关闭">×</button></div>
+        <label>标题<input id="new-title" name="title" placeholder="例如：项目设计记录" autocomplete="off" /></label>
+        <label>相对路径<input id="new-path" name="path" placeholder="notes/design.md" spellcheck="false" autocomplete="off" /></label>
+        <label>正文<textarea id="new-content" name="content" placeholder="# 项目设计记录\n\n从这里开始…"></textarea></label>
+        <div class="modal-hint">路径只能位于当前知识库内；没有 `.md` 后缀时会自动补上。</div>
+        <div class="modal-actions"><button class="secondary-button" value="cancel">取消</button><button class="primary-button" id="create-entry-submit" value="default">创建文件</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="modal" id="source-dialog">
+      <form method="dialog" id="source-form">
+        <div class="modal-heading"><div><span class="panel-eyebrow">Source</span><h2>加载 Markdown 目录</h2></div><button class="modal-close" value="cancel" aria-label="关闭">×</button></div>
+        <label>本地绝对路径<input id="source-path" name="path" placeholder="/absolute/path/to/notes" spellcheck="false" autocomplete="off" /></label>
+        <div class="modal-hint">仅在本机回环服务中启用。服务端会扫描目录内的 Markdown 文件，不会把绝对路径发送到页面。</div>
+        <div class="modal-actions"><button class="secondary-button" value="cancel">取消</button><button class="primary-button" value="default">加载目录</button></div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/app.js?v=workspace-settings"></script>
+  </body>
+</html>

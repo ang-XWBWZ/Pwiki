@@ -3,6 +3,8 @@
   "references": [
     { "path": "core" },
     { "path": "cli" },
-    { "path": "mcp" }
+    { "path": "mcp" },
+    { "path": "api" },
+    { "path": "webpage" }
   ]
 }

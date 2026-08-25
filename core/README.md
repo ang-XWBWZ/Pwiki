@@ -56,6 +56,11 @@ setRerankerConfig({ enabled: true, dtype: "int8", inputTopK: 20, outputTopK: 10 
 CRUD 默认在返回前完成单文件 BM25 增量更新，并等待该文件的向量更新，保持一次性
 CLI/脚本的原有完成语义。常驻服务可启用后台向量队列：
 
+CRUD 写操作使用已加载的数据源路径；未注册的数据源不会被隐式创建或写入。
+写入路径是 source-relative Markdown 路径，省略 `.md` 时自动补全，大小写变体会
+规范化为小写 `.md`。省略 source selector 的单文件 rename/move/delete 仍兼容，
+但当多个 source 命中同名路径时会拒绝操作，要求显式传入 source。
+
 ```typescript
 const engine = new WikiEngine({
   basePath: "~/.pwiki",

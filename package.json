@@ -6,7 +6,9 @@
   "workspaces": [
     "core",
     "mcp",
-    "cli"
+    "cli",
+    "api",
+    "webpage"
   ],
   "scripts": {
     "build": "npm run build --workspaces",

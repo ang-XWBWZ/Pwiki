@@ -126,6 +126,65 @@ pwiki llm                          # 查看 LLM 配置
 
 编译产出的 topic / concepts / aliases 自动进入 BM25 索引，搜别名即可命中。
 
+## Web 管理端
+
+Pwiki 的 Web 管理端采用与 CLI、MCP 相同的 core 能力，通过 HTTP API 作为平台适配边界：
+
+```text
+@llangtop/pwiki-core       索引、搜索、Markdown CRUD 和状态
+          ↓
+@llangtop/pwiki-api        /api/v1 HTTP API
+          ↓
+@llangtop/pwiki-webpage    浏览器页面和窗口状态
+```
+
+页面服务会在同一个进程中托管静态页面和 `/api/v1` API，不会把 core、Node 文件系统或
+MCP 子进程打进浏览器 bundle。详细 API 路由、错误边界和 core 适配规范见
+[`api/README.md`](api/README.md)；页面包的实现边界见
+[`webpage/README.md`](webpage/README.md)。
+
+### 启动 Web 页面
+
+在 `Pwiki` 目录执行：
+
+```bash
+npm install
+npm run build -w @llangtop/pwiki-webpage
+npm run start -w @llangtop/pwiki-webpage -- --port 4317
+```
+
+打开 [http://127.0.0.1:4317/](http://127.0.0.1:4317/)。本机回环地址默认允许知识库管理；
+如果服务绑定到其他地址，需要显式使用 `--allow-source-management` 才能启用加载、刷新
+和移除本地数据源：
+
+```bash
+npm run start -w @llangtop/pwiki-webpage -- \
+  --host 127.0.0.1 --port 4317 --base-path /absolute/path/to/wiki-home \
+  --allow-source-management
+```
+
+只需要 API 时，可以单独启动：
+
+```bash
+npm run start -w @llangtop/pwiki-api -- --port 4318
+```
+
+当前 API 默认没有身份认证和 TLS，适合本机或受控内网使用；不要直接把服务暴露到公网。
+
+### 页面能力
+
+- 左侧 Markdown 文件管理器：按目录展开、文件筛选、加载和切换知识库；
+- `keyword`、`semantic`、`hybrid` 三种搜索模式，搜索结果支持跳转到 Markdown；
+- 搜索历史保存在当前浏览器本地，离开搜索页后查询和结果仍可恢复，最多保留 8 条；
+- 可选的二次精排开关，控制 Hybrid/RRF 结果是否使用 Cross-Encoder 复核；
+- 顶部窗口管理：窗口压缩、堆叠、已打开/未打开页面区分，以及独立的新建工作区；
+- 新工作区显示最近关闭的 Markdown 文件，记录保存在浏览器本地，点击即可恢复；
+- Markdown 阅读、编辑、保存、重命名、移动和删除，右侧同步展示标题大纲与文件属性；
+- 六套 CSS 变量主题：夜幕紫、纸张米白、海湾蓝、松林绿、玫瑰粉和琥珀橙。
+
+搜索历史和最近关闭记录只保存在浏览器 `localStorage`，不会写入 Markdown 文件，也不会
+替代 core 的索引状态；重新打开文件后，页面仍以 API 返回的条目和文件内容为准。
+
 ## 环境变量
 
 | 变量 | 用途 |
@@ -185,5 +244,7 @@ pwiki llm                          # 查看 LLM 配置
 | 包 | 用途 |
 |------|------|
 | `@llangtop/pwiki-core` | 搜索引擎库 |
+| `@llangtop/pwiki-api` | Node HTTP API 适配器 |
+| `@llangtop/pwiki-webpage` | 浏览器 Web 管理端 |
 | `@llangtop/pwiki-cli` | 终端命令行 |
 | `@llangtop/pwiki-mcp` | MCP Server |

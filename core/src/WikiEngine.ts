@@ -4,7 +4,7 @@
 // CLI / MCP / 库用户均通过此类交互。
 
 import { resolve, join, dirname, basename } from "node:path";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { initWikiConfig, setWikiHome, wikiHome, configFile } from "./config.js";
 import * as cfg from "./lib/store-config.js";
 import * as idx from "./lib/store-index.js";
@@ -21,6 +21,8 @@ import {
   buildBm25Index,
   closeBm25Databases,
   hasBm25Index,
+  readBm25Index,
+  removeDocFromIndex,
   upsertBm25Document,
   writeBm25Index,
 } from "./lib/bm25.js";
@@ -49,6 +51,7 @@ import {
   removeSourceShard,
   resolveSourceRef,
   resolveWithinSource,
+  normalizeMarkdownRelPath,
   sourceIndexExists,
   sourceRefForPath,
   upsertSourceEntries,
@@ -109,8 +112,24 @@ export class WikiEngine {
   get sources(): string[] { return cfg.getSources(); }
   get sourceRefs(): SourceRef[] { return listSourceRefs(); }
 
+  /** List indexed Markdown entries inside one source-relative prefix. */
+  listFiles(sourceSelector: string, pathPrefix = ""): FileEntry[] {
+    const source = resolveSourceRef(sourceSelector);
+    if (!source) return [];
+    const normalizedPrefix = pathPrefix ? normalizeRelPath(pathPrefix).replace(/\/$/, "") : "";
+    return Object.values(readSourceIndex(source.id))
+      .filter((entry) => !normalizedPrefix || pathMatchesPrefix(entry.relPath, normalizedPrefix))
+      .sort((a, b) => a.relPath.localeCompare(b.relPath));
+  }
+
   addSource(absPath: string): boolean {
-    return cfg.addSource(resolve(absPath));
+    const absolute = resolve(absPath);
+    try {
+      if (!existsSync(absolute) || !statSync(absolute).isDirectory()) return false;
+    } catch {
+      return false;
+    }
+    return cfg.addSource(absolute);
   }
 
   removeSource(target: string): string | null {
@@ -132,7 +151,8 @@ export class WikiEngine {
   async loadSource(absPath: string): Promise<number> {
     await this.vectorQueue.drain();
     absPath = resolve(absPath);
-    const source = sourceRefForPath(absPath);
+    const source = resolveSourceRef(absPath);
+    if (!source) return 0;
 
     // 保存旧索引，用于检测删除
     const oldIndex = idx.getIndex();
@@ -340,14 +360,56 @@ export class WikiEngine {
     return { entry, content };
   }
 
+  /**
+   * Resolve a mutation target without falling back to the global relPath map.
+   *
+   * Existing single-source callers may continue omitting sourceSelector. Once
+   * more than one loaded source contains the same relative path, the target is
+   * intentionally considered ambiguous and the mutation is rejected.
+   */
+  private resolveMutationEntry(
+    relPath: string,
+    sourceSelector?: string,
+  ): { entry: FileEntry; source: SourceRef } | null {
+    let normalizedPath: string;
+    try {
+      normalizedPath = normalizeMarkdownRelPath(relPath);
+    } catch {
+      return null;
+    }
+
+    if (sourceSelector !== undefined) {
+      const source = resolveSourceRef(sourceSelector);
+      if (!source) return null;
+      const result = this.readEntry(normalizedPath, source.id);
+      return result ? { entry: result.entry, source } : null;
+    }
+
+    const matches = listSourceRefs()
+      .map((source) => {
+        const result = this.readEntry(normalizedPath, source.id);
+        return result ? { entry: result.entry, source } : null;
+      })
+      .filter((match): match is { entry: FileEntry; source: SourceRef } => !!match);
+    return matches.length === 1 ? matches[0] : null;
+  }
+
   async createEntry(
     sourceDir: string, relPath: string, title?: string,
     tags: string[] = [], content = "",
   ): Promise<string> {
     sourceDir = resolve(sourceDir);
-    const source = sourceRefForPath(sourceDir);
-    const finalPath = relPath.endsWith(".md") ? relPath : relPath + ".md";
-    const normalizedPath = normalizeRelPath(finalPath);
+    const source = resolveSourceRef(sourceDir);
+    if (!source) return "source-not-found: " + sourceDir;
+    sourceDir = source.path;
+
+    let normalizedPath: string;
+    try {
+      normalizedPath = normalizeMarkdownRelPath(relPath);
+    } catch (error) {
+      return `invalid-path: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    const finalPath = normalizedPath;
     const finalAbs = resolveWithinSource(sourceDir, normalizedPath);
     if (existsSync(finalAbs)) return "exists: " + finalAbs;
 
@@ -360,8 +422,12 @@ export class WikiEngine {
     ].join("\n");
     const fullContent = fm + content;
 
-    mkdirSync(dirname(finalAbs), { recursive: true });
-    writeFileSync(finalAbs, fullContent, "utf-8");
+    try {
+      mkdirSync(dirname(finalAbs), { recursive: true });
+      writeFileSync(finalAbs, fullContent, "utf-8");
+    } catch (error) {
+      return `write-failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
 
     const entry = parseFileEntry(sourceDir, finalAbs);
     if (entry) {
@@ -375,11 +441,12 @@ export class WikiEngine {
     return normalizedPath;
   }
 
-  async renameEntry(relPath: string, newTitle: string): Promise<boolean> {
-    const entry = idx.getEntry(relPath);
-    if (!entry) return false;
+  async renameEntry(relPath: string, newTitle: string, sourceSelector?: string): Promise<boolean> {
+    const resolved = this.resolveMutationEntry(relPath, sourceSelector);
+    if (!resolved) return false;
+    const { entry, source } = resolved;
 
-    const fullPath = resolve(entry.sourceDir, entry.relPath);
+    const fullPath = resolveWithinSource(source.path, entry.relPath);
     if (!existsSync(fullPath)) return false;
 
     let content: string;
@@ -403,7 +470,6 @@ export class WikiEngine {
 
     entry.title = newTitle;
     idx.mergeIndex([entry]);
-    const source = sourceRefForPath(entry.sourceDir);
     upsertSourceEntries(source, [entry]);
     markFileContentChanged(entry.relPath, newContent, source.id);
     this.updateBm25AfterChange(source, entry);
@@ -411,14 +477,20 @@ export class WikiEngine {
     return true;
   }
 
-  async moveEntry(relPath: string, newRelPath: string): Promise<boolean> {
-    const entry = idx.getEntry(relPath);
-    if (!entry) return false;
+  async moveEntry(relPath: string, newRelPath: string, sourceSelector?: string): Promise<boolean> {
+    const resolved = this.resolveMutationEntry(relPath, sourceSelector);
+    if (!resolved) return false;
+    const { entry, source } = resolved;
 
-    const normalizedOldPath = normalizeRelPath(relPath);
-    const normalizedNewPath = normalizeRelPath(newRelPath);
-    const srcFile = resolveWithinSource(entry.sourceDir, normalizedOldPath);
-    const dstFile = resolveWithinSource(entry.sourceDir, normalizedNewPath);
+    const normalizedOldPath = entry.relPath;
+    let normalizedNewPath: string;
+    try {
+      normalizedNewPath = normalizeMarkdownRelPath(newRelPath);
+    } catch {
+      return false;
+    }
+    const srcFile = resolveWithinSource(source.path, normalizedOldPath);
+    const dstFile = resolveWithinSource(source.path, normalizedNewPath);
     if (!existsSync(srcFile) || existsSync(dstFile)) return false;
 
     try {
@@ -429,7 +501,6 @@ export class WikiEngine {
     const newEntry = parseFileEntry(entry.sourceDir, dstFile);
     if (newEntry) {
       idx.updateEntryPath(normalizedOldPath, newEntry.relPath, newEntry);
-      const source = sourceRefForPath(entry.sourceDir);
       removeSourceEntry(source.id, normalizedOldPath);
       removeFileState(normalizedOldPath, source.id);
       cache.removeContent(normalizedOldPath, entry.sourceDir);
@@ -446,15 +517,59 @@ export class WikiEngine {
     return true;
   }
 
+  async deleteEntry(relPath: string, sourceSelector?: string): Promise<boolean> {
+    const resolved = this.resolveMutationEntry(relPath, sourceSelector);
+    if (!resolved) return false;
+    const { entry, source } = resolved;
+
+    const normalizedPath = entry.relPath;
+    const fullPath = resolveWithinSource(source.path, normalizedPath);
+    if (!existsSync(fullPath)) return false;
+
+    try { unlinkSync(fullPath); } catch { return false; }
+
+    this.vectorQueue.cancelPrefix(`${source.id}\0embed\0${normalizedPath}`);
+    idx.removeEntry(normalizedPath);
+    removeSourceEntry(source.id, normalizedPath);
+    removeFileState(normalizedPath, source.id);
+    cache.removeContent(normalizedPath, entry.sourceDir);
+    vec.removeEmbedding(normalizedPath, source.id);
+
+    const sourceIndex = readBm25Index(source.id);
+    if (sourceIndex) {
+      removeDocFromIndex(normalizedPath, sourceIndex);
+      writeBm25Index(sourceIndex, source.id);
+    }
+
+    // 兼容未注册 source 的旧全局索引模式。
+    if (!resolveSourceRef(source.id)) {
+      const globalIndex = readBm25Index();
+      if (globalIndex) {
+        removeDocFromIndex(normalizedPath, globalIndex);
+        writeBm25Index(globalIndex);
+        writeBm25Stats(bm25StatsFromIndex(globalIndex));
+      }
+    }
+    return true;
+  }
+
   async modifyEntry(sourceDir: string, relPath: string, content: string): Promise<boolean> {
     sourceDir = resolve(sourceDir);
-    const source = sourceRefForPath(sourceDir);
-    const normalizedPath = normalizeRelPath(relPath);
-    const fullPath = resolveWithinSource(sourceDir, normalizedPath);
+    const source = resolveSourceRef(sourceDir);
+    if (!source) return false;
+
+    let normalizedPath: string;
+    try {
+      normalizedPath = normalizeMarkdownRelPath(relPath);
+    } catch {
+      return false;
+    }
+    const fullPath = resolveWithinSource(source.path, normalizedPath);
+    if (!this.readEntry(normalizedPath, source.id)) return false;
     try {
       writeFileSync(fullPath, content, "utf-8");
-      cache.setContent(normalizedPath, content, sourceDir);
-      const entry = parseFileEntry(sourceDir, fullPath);
+      cache.setContent(normalizedPath, content, source.path);
+      const entry = parseFileEntry(source.path, fullPath);
       if (entry) {
         idx.mergeIndex([entry]);
         upsertSourceEntries(source, [entry]);
@@ -560,6 +675,13 @@ export class WikiEngine {
 
   async waitForBackgroundTasks(): Promise<void> {
     await this.vectorQueue.drain();
+  }
+
+  /** Drain owned work and release this engine's BM25/reranker resources. */
+  async dispose(): Promise<void> {
+    await this.waitForBackgroundTasks();
+    await this.disposeOwnedReranker();
+    closeBm25Databases();
   }
 
   // ═══════════════ Chunk Read ═══════════════
@@ -669,6 +791,9 @@ export class WikiEngine {
   }
 
   listModels(): ModelInfo[] { return getBuiltinModels(); }
+
+  /** Persist the active embedding model selection without starting a model load. */
+  selectModel(modelId: string): ModelInfo | null { return selectModel(modelId); }
 
   // ═══════════════ LLM Compile ═══════════════
 

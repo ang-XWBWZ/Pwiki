@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -104,5 +104,10 @@ describe("CRUD incremental maintenance", () => {
     index = readBm25Index(sourceId)!;
     expect(index.docs["created.md"]).toBeDefined();
     expect(index.terms.create_incremental_token?.postings.some(p => p.docId === "created.md") ?? false).toBe(false);
+
+    expect(await engine.deleteEntry("created.md")).toBe(true);
+    expect(existsSync(join(sourceDir, "created.md"))).toBe(false);
+    index = readBm25Index(sourceId)!;
+    expect(index.docs["created.md"]).toBeUndefined();
   });
 });

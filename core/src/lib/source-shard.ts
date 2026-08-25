@@ -63,6 +63,27 @@ export function normalizeRelPath(path: string): string {
   return parts.join("/");
 }
 
+/**
+ * Normalize a write-target Markdown path.
+ *
+ * Entry mutations use a single canonical suffix so that files created through
+ * CRUD follow the same rule as the scanner. A missing suffix remains a
+ * convenient shorthand for `.md`; an existing suffix is normalized to lower
+ * case instead of producing names such as `note.MD.md`.
+ */
+export function normalizeMarkdownRelPath(path: string): string {
+  if (path.includes("\0")) throw new Error("Path contains an invalid character");
+  const candidate = path.replace(/\\/g, "/");
+  if (isAbsolute(candidate) || /^[A-Za-z]:\//.test(candidate)) {
+    throw new Error(`Path must be relative to the data source: ${path}`);
+  }
+  const normalized = normalizeRelPath(path);
+  if (!normalized) throw new Error("Markdown path must not be empty");
+  return /\.md$/i.test(normalized)
+    ? `${normalized.slice(0, -3)}.md`
+    : `${normalized}.md`;
+}
+
 export function resolveWithinSource(sourcePath: string, relPath: string): string {
   const root = resolve(sourcePath);
   const target = resolve(root, normalizeRelPath(relPath));
