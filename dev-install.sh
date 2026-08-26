@@ -38,7 +38,11 @@ else
   echo "=== skip build and tests; use existing dist output ==="
 fi
 
-chmod +x "$ROOT_DIR/cli/dist/index.js" "$ROOT_DIR/mcp/dist/index.js"
+chmod 0755 \
+  "$ROOT_DIR/cli/dist/index.js" \
+  "$ROOT_DIR/mcp/dist/index.js" \
+  "$ROOT_DIR/api/dist/server.js" \
+  "$ROOT_DIR/webpage/dist/server.js"
 
 echo "=== link local packages ==="
 for package_name in "${LINKED_PACKAGES[@]}"; do

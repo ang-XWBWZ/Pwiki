@@ -1,6 +1,6 @@
 {
   "name": "@llangtop/pwiki-api",
-  "version": "1.3.4",
+  "version": "1.3.7",
   "files": ["dist", "README.md"],
   "description": "HTTP API adapter for the Pwiki knowledge engine",
   "type": "module",

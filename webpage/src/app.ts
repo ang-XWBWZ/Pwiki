@@ -96,7 +96,6 @@ const elements = {
   sourcePopoverName: el<HTMLElement>("source-popover-name"),
   newNoteButton: el<HTMLButtonElement>("new-note-button"),
   refreshButton: el<HTMLButtonElement>("refresh-button"),
-  toggleFileSidebarButton: el<HTMLButtonElement>("toggle-file-sidebar-button"),
   fileManagerPanel: el<HTMLElement>("file-manager-panel"),
   searchSidebarPanel: el<HTMLElement>("search-sidebar-panel"),
   railFiles: el<HTMLButtonElement>("rail-files"),
@@ -266,8 +265,8 @@ function bindEvents(): void {
   });
   elements.focusSearch.addEventListener("click", () => openSearch());
   elements.closeSearchButton.addEventListener("click", () => closeSearch());
-  elements.railFiles.addEventListener("click", () => setSidebarMode("files"));
-  elements.railSearch.addEventListener("click", () => openSearch());
+  elements.railFiles.addEventListener("click", () => toggleSidebarMode("files"));
+  elements.railSearch.addEventListener("click", () => toggleSidebarMode("search"));
   elements.settingsRerankerToggle.addEventListener("change", () => { void toggleReranker(); });
   elements.clearSearchHistoryButton.addEventListener("click", () => clearSearchHistory());
   elements.clearRecentlyClosedButton.addEventListener("click", () => clearRecentlyClosed());
@@ -296,8 +295,6 @@ function bindEvents(): void {
   document.getElementById("rail-refresh")?.addEventListener("click", () => { void refreshWorkspace(); });
   document.getElementById("rail-source")?.addEventListener("click", () => toggleSourcePopover());
   document.getElementById("rail-settings")?.addEventListener("click", () => openSettings());
-  document.querySelector('[data-rail="search"]')?.addEventListener("click", () => openSearch());
-  elements.toggleFileSidebarButton.addEventListener("click", () => toggleFileSidebar());
   elements.emptySourceButton.addEventListener("click", () => openSourceDialog());
   elements.previewModeButton.addEventListener("click", () => setViewMode("preview"));
   elements.liveModeButton.addEventListener("click", () => setViewMode("live"));
@@ -636,6 +633,7 @@ async function runSearch(): Promise<void> {
 function openSearch(): void {
   if (state.settingsOpen) closeSettings();
   closeSourcePopover();
+  setFileSidebarCollapsed(false);
   setSidebarMode("search");
   renderSearchPanel();
   window.setTimeout(() => elements.searchInput.focus(), 0);
@@ -876,13 +874,54 @@ function renderRecentlyClosed(): void {
   });
 }
 
+function toggleSidebarMode(mode: SidebarMode): void {
+  if (state.sidebarMode === mode) {
+    if (state.fileCollapsed) {
+      if (mode === "search") openSearch();
+      else setFileSidebarCollapsed(false);
+    } else {
+      setFileSidebarCollapsed(true);
+    }
+    return;
+  }
+  if (mode === "search") {
+    openSearch();
+    return;
+  }
+  setFileSidebarCollapsed(false);
+  setSidebarMode("files");
+}
+
 function setSidebarMode(mode: SidebarMode): void {
   state.sidebarMode = mode;
-  if (mode === "search" && state.fileCollapsed) toggleFileSidebar();
   elements.fileManagerPanel.classList.toggle("hidden", mode !== "files");
   elements.searchSidebarPanel.classList.toggle("hidden", mode !== "search");
+  elements.fileSidebar.classList.toggle("search-mode", mode === "search");
   elements.railFiles.classList.toggle("active", mode === "files");
   elements.railSearch.classList.toggle("active", mode === "search");
+  syncSidebarRailState();
+}
+
+function setFileSidebarCollapsed(collapsed: boolean): void {
+  state.fileCollapsed = collapsed;
+  elements.fileSidebar.classList.toggle("collapsed", collapsed);
+  elements.workspaceGrid.classList.toggle("file-collapsed", collapsed);
+  syncSidebarRailState();
+}
+
+function syncSidebarRailState(): void {
+  const filesActive = state.sidebarMode === "files";
+  const searchActive = state.sidebarMode === "search";
+  elements.railFiles.setAttribute("aria-pressed", String(filesActive));
+  elements.railSearch.setAttribute("aria-pressed", String(searchActive));
+  elements.railFiles.setAttribute("aria-expanded", String(filesActive && !state.fileCollapsed));
+  elements.railSearch.setAttribute("aria-expanded", String(searchActive && !state.fileCollapsed));
+  elements.railFiles.title = filesActive
+    ? (state.fileCollapsed ? "文件管理（展开）" : "文件管理（点击收起）")
+    : "文件管理";
+  elements.railSearch.title = searchActive
+    ? (state.fileCollapsed ? "搜索（展开）" : "搜索（点击收起）")
+    : "搜索";
 }
 
 function openCreateDialog(): void {
@@ -1135,14 +1174,6 @@ function activateWorkspaceWindow(item: WorkspaceWindow): void {
   setSidebarMode("files");
   renderWorkspace();
   elements.fileSidebar.classList.remove("mobile-open");
-}
-
-function toggleFileSidebar(): void {
-  state.fileCollapsed = !state.fileCollapsed;
-  elements.fileSidebar.classList.toggle("collapsed", state.fileCollapsed);
-  elements.workspaceGrid.classList.toggle("file-collapsed", state.fileCollapsed);
-  elements.toggleFileSidebarButton.textContent = state.fileCollapsed ? "›" : "‹";
-  elements.toggleFileSidebarButton.title = state.fileCollapsed ? "展开文件栏" : "收起文件栏";
 }
 
 function openSettings(): void {

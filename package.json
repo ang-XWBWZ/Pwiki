@@ -1,6 +1,6 @@
 {
   "name": "pwiki",
-  "version": "1.3.4",
+  "version": "1.3.7",
   "private": true,
   "description": "Wiki knowledge base — core engine, MCP server, and CLI",
   "workspaces": [

@@ -93,7 +93,7 @@ const TOOL_REFERENCE = `# Pwiki command reference
 Read each tool's \`description\` and \`inputSchema\` before use; they contain the exact preconditions and arguments.`;
 
 const server = new McpServer(
-  { name: "pwiki", version: "1.3.4" },
+  { name: "pwiki", version: "1.3.7" },
   { instructions: SERVER_INSTRUCTIONS },
 );
 

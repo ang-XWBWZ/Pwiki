@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 
 if [[ $# -ne 1 ]]; then
   echo "Usage: $0 <version>"
-  echo "Example: $0 1.3.3"
+  echo "Example: $0 1.3.7"
   exit 2
 fi
 
@@ -26,6 +26,12 @@ PUBLIC_PACKAGES=(
 )
 
 WORKSPACE_DIRS=(core cli mcp api webpage)
+EXECUTABLE_ENTRYPOINTS=(
+  "cli/dist/index.js"
+  "mcp/dist/index.js"
+  "api/dist/server.js"
+  "webpage/dist/server.js"
+)
 
 echo "=== verify package versions: $RELEASE_VERSION ==="
 node - "$RELEASE_VERSION" <<'NODE'
@@ -75,6 +81,17 @@ done
 
 echo "=== build all workspaces in dependency order ==="
 npm run build
+
+echo "=== mark package entrypoints executable ==="
+for entrypoint in "${EXECUTABLE_ENTRYPOINTS[@]}"; do
+  chmod 0755 "$ROOT_DIR/$entrypoint"
+done
+for entrypoint in "${EXECUTABLE_ENTRYPOINTS[@]}"; do
+  if [[ ! -x "$ROOT_DIR/$entrypoint" ]]; then
+    echo "Package entrypoint is not executable: $entrypoint" >&2
+    exit 1
+  fi
+done
 
 echo "=== run core tests ==="
 npm test -w @llangtop/pwiki-core

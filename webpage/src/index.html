@@ -44,8 +44,8 @@
       <div class="workspace-grid" id="workspace-grid">
         <nav class="nav-rail" aria-label="工作区工具栏">
           <div class="rail-group">
-            <button class="rail-button active" type="button" title="文件管理" id="rail-files" data-rail="files">▤</button>
-            <button class="rail-button" type="button" title="搜索" id="rail-search" data-rail="search">⌕</button>
+            <button class="rail-button active" type="button" title="文件管理" id="rail-files" data-rail="files" aria-controls="file-sidebar" aria-expanded="true" aria-pressed="true">▤</button>
+            <button class="rail-button" type="button" title="搜索" id="rail-search" data-rail="search" aria-controls="file-sidebar" aria-expanded="false" aria-pressed="false">⌕</button>
           </div>
           <div class="rail-group rail-bottom">
             <button class="rail-button" type="button" title="刷新索引" id="rail-refresh">↻</button>
@@ -86,8 +86,6 @@
               <button class="small-icon-button" id="refresh-button" type="button" title="刷新文件树">↻</button>
             </div>
           </div>
-          <button class="sidebar-collapse-button" id="toggle-file-sidebar-button" type="button" title="收起文件栏">‹</button>
-
           <section class="sidebar-mode-panel" id="file-manager-panel" aria-label="文件管理器">
             <div class="sidebar-search">
               <span aria-hidden="true">⌕</span>

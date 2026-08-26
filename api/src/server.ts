@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { realpathSync } from "node:fs";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -120,7 +121,7 @@ function isLoopback(host: string): boolean {
   return host === "127.0.0.1" || host === "::1" || host === "localhost";
 }
 
-const entryUrl = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
+const entryUrl = process.argv[1] ? pathToFileURL(realpathSync(resolve(process.argv[1]))).href : "";
 if (import.meta.url === entryUrl) {
   void run().catch((error) => {
     console.error(`[pwiki-api] ${error instanceof Error ? error.message : String(error)}`);
