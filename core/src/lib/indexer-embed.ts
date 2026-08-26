@@ -18,8 +18,10 @@ import {
 import { getCurrentModel } from "./model-registry.js";
 import { initialize, isAvailable, embed } from "./embedder.js";
 import { extractChunksAST } from "./ast-chunker.js";
-import { updateFileStates, detectFileChange, getFileState, getManifest } from "./file-manifest.js";
+import { computeMD5, updateFileStates, detectFileChange, getFileState, getManifest } from "./file-manifest.js";
 import type { FileEntry } from "./types.js";
+
+type ExtractedChunk = Awaited<ReturnType<typeof extractChunks>>[number];
 
 /** 鏍囬琛屾鍒欙紙浠呯敤浜?fallback锛?*/
 const HEADING_RE = /^#{1,4} /;
@@ -148,6 +150,14 @@ export async function extractChunks(
 }
 
 /**
+ * 只按实际送入 embedding 模型的文本判断 chunk 是否需要重算。
+ * Markdown 标记变化但语义输入未变化时，可以复用已有向量；BM25 仍由文件级更新维护。
+ */
+function chunkContentMd5(chunk: ExtractedChunk): string {
+  return computeMD5(chunk.embedText);
+}
+
+/**
  * 鎵归噺鐢熸垚 embedding 骞舵寔涔呭寲鍒?vectors.json
  */
 export async function generateEmbeddings(
@@ -170,6 +180,7 @@ export async function generateEmbeddings(
   const chunkInfo = getChunkInfo(sourceId);
 
   let generated = 0;
+  let committedFiles = 0;
   const stateUpdates: Array<{
     relPath: string;
     patch: Parameters<typeof updateFileStates>[0][number]["patch"];
@@ -192,13 +203,23 @@ export async function generateEmbeddings(
     const tempChunks: Record<string, typeof chunkInfo[string]> = {};
     let allOk = true;
 
+    let fileGenerated = 0;
     for (const ch of chunks) {
+      const contentMd5 = chunkContentMd5(ch);
+      const previousVector = existing[ch.key];
+      const previousInfo = chunkInfo[ch.key];
       try {
-        tempVectors[ch.key] = await embed(ch.embedText);
+        if (previousVector && previousInfo?.contentMd5 === contentMd5) {
+          tempVectors[ch.key] = previousVector;
+        } else {
+          tempVectors[ch.key] = await embed(ch.embedText);
+          fileGenerated++;
+        }
         tempChunks[ch.key] = {
           heading: ch.heading, level: ch.level,
           headingPath: ch.headingPath, chunkTypeHint: ch.chunkTypeHint,
           wikilinks: ch.wikilinks, startLine: ch.startLine, endLine: ch.endLine,
+          contentMd5,
         };
       } catch {
         allOk = false;
@@ -230,7 +251,8 @@ export async function generateEmbeddings(
     }
     Object.assign(existing, tempVectors);
     Object.assign(chunkInfo, tempChunks);
-    generated += chunks.length;
+    generated += fileGenerated;
+    committedFiles++;
 
     // 更新 manifest md5
     stateUpdates.push({
@@ -255,7 +277,7 @@ export async function generateEmbeddings(
     }
   }
 
-  if (generated > 0) {
+  if (committedFiles > 0) {
     const model = getCurrentModel();
     setVectorData({
       model: model.hfRepo,

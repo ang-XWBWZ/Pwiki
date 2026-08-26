@@ -1,6 +1,6 @@
 {
   "name": "pwiki",
-  "version": "1.3.2",
+  "version": "1.3.4",
   "private": true,
   "description": "Wiki knowledge base — core engine, MCP server, and CLI",
   "workspaces": [
@@ -11,9 +11,11 @@
     "webpage"
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
+    "build": "npm run build -w @llangtop/pwiki-core && npm run build -w @llangtop/pwiki-cli && npm run build -w @llangtop/pwiki-mcp && npm run build -w @llangtop/pwiki-api && npm run build -w @llangtop/pwiki-webpage",
     "mcp": "npm run start -w @llangtop/pwiki-mcp",
-    "cli": "npm run start -w @llangtop/pwiki-cli"
+    "cli": "npm run start -w @llangtop/pwiki-cli",
+    "api": "npm run start -w @llangtop/pwiki-api --",
+    "webpage": "npm run start -w @llangtop/pwiki-webpage --"
   },
   "engines": {
     "node": ">=22"

@@ -281,7 +281,7 @@ export function searchBm25Index(
   for (const [term, queryTerm] of queryTerms) {
     const termEntry = index.terms[term];
     if (!termEntry) continue;
-    if (termEntry.df >= index.N * DF_NOISE_THRESHOLD && !isProtectedWord(term)) continue;
+    if (index.N > 1 && termEntry.df >= index.N * DF_NOISE_THRESHOLD && !isProtectedWord(term)) continue;
 
     const idfVal = Math.log((index.N - termEntry.df + 0.5) / (termEntry.df + 0.5) + 1);
     if (idfVal <= 0) continue;
@@ -461,7 +461,7 @@ export function buildBm25Stats(sourceEntries?: FileEntry[]): Bm25Stats {
     }
   }
 
-  if (docCount > 0) {
+  if (docCount > 1) {
     const threshold = docCount * DF_NOISE_THRESHOLD;
     for (const [term, count] of df) {
       if (count >= threshold && !isProtectedWord(term)) df.delete(term);

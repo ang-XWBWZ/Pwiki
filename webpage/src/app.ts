@@ -9,7 +9,7 @@ import type {
 import { PwikiApiClient } from "./api-client.js";
 
 type ThemeId = "midnight" | "paper" | "ocean" | "forest" | "rose" | "amber";
-type ViewMode = "preview" | "edit";
+type ViewMode = "preview" | "live" | "source";
 type SidebarMode = "files" | "search";
 
 interface HeadingItem {
@@ -73,6 +73,8 @@ const RECENTLY_CLOSED_LIMIT = 8;
 const el = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const elements = {
   mobileSidebarButton: el<HTMLButtonElement>("mobile-sidebar-button"),
+  brandRepositoryName: el<HTMLElement>("brand-repository-name"),
+  brandProductName: el<HTMLElement>("brand-product-name"),
   fileSidebar: el<HTMLElement>("file-sidebar"),
   tabBar: el<HTMLElement>("tab-bar"),
   windowManagerButton: el<HTMLButtonElement>("window-manager-button"),
@@ -107,7 +109,8 @@ const elements = {
   loadSourceButton: el<HTMLButtonElement>("load-source-button"),
   breadcrumb: el<HTMLElement>("breadcrumb"),
   previewModeButton: el<HTMLButtonElement>("preview-mode-button"),
-  editModeButton: el<HTMLButtonElement>("edit-mode-button"),
+  liveModeButton: el<HTMLButtonElement>("live-mode-button"),
+  sourceModeButton: el<HTMLButtonElement>("source-mode-button"),
   saveEntryButton: el<HTMLButtonElement>("save-entry-button"),
   documentMoreButton: el<HTMLButtonElement>("document-more-button"),
   searchForm: el<HTMLFormElement>("search-form"),
@@ -118,11 +121,10 @@ const elements = {
   searchMeta: el<HTMLElement>("search-meta"),
   closeSearchButton: el<HTMLButtonElement>("close-search-button"),
   searchResultList: el<HTMLElement>("search-result-list"),
-  searchHistory: el<HTMLElement>("search-history"),
+  searchHistory: el<HTMLDetailsElement>("search-history"),
   searchHistoryList: el<HTMLElement>("search-history-list"),
+  searchHistoryCount: el<HTMLElement>("search-history-count"),
   clearSearchHistoryButton: el<HTMLButtonElement>("clear-search-history"),
-  rerankerToggle: el<HTMLInputElement>("reranker-toggle"),
-  rerankerState: el<HTMLElement>("reranker-state"),
   emptyState: el<HTMLElement>("empty-state"),
   emptyNewButton: el<HTMLButtonElement>("empty-new-button"),
   emptySourceButton: el<HTMLButtonElement>("empty-source-button"),
@@ -134,6 +136,12 @@ const elements = {
   entryTags: el<HTMLElement>("entry-tags"),
   entryMeta: el<HTMLElement>("entry-meta"),
   markdownView: el<HTMLElement>("markdown-view"),
+  liveEditorView: el<HTMLElement>("live-editor-view"),
+  liveEditorPath: el<HTMLElement>("live-editor-path"),
+  liveEntryEditor: el<HTMLTextAreaElement>("live-entry-editor"),
+  liveMarkdownView: el<HTMLElement>("live-markdown-view"),
+  liveDirtyIndicator: el<HTMLElement>("live-dirty-indicator"),
+  liveEditorCount: el<HTMLElement>("live-editor-count"),
   editorView: el<HTMLElement>("editor-view"),
   editorPath: el<HTMLElement>("editor-path"),
   entryEditor: el<HTMLTextAreaElement>("entry-editor"),
@@ -163,6 +171,9 @@ const elements = {
   settingsSemanticButton: el<HTMLButtonElement>("settings-semantic-button"),
   settingsModelList: el<HTMLElement>("settings-model-list"),
   settingsModelMessage: el<HTMLElement>("settings-model-message"),
+  settingsRerankerToggle: el<HTMLInputElement>("settings-reranker-toggle"),
+  settingsRerankerState: el<HTMLElement>("settings-reranker-state"),
+  settingsRerankerBadge: el<HTMLElement>("settings-reranker-badge"),
   settingsLlmBadge: el<HTMLElement>("settings-llm-badge"),
   settingsLlmBase: el<HTMLElement>("settings-llm-base"),
   settingsLlmModel: el<HTMLElement>("settings-llm-model"),
@@ -185,6 +196,7 @@ const state: {
   currentFolder: string;
   entry: ApiEntry | null;
   viewMode: ViewMode;
+  draftContent: string;
   dirty: boolean;
   sidebarMode: SidebarMode;
   windows: WorkspaceWindow[];
@@ -214,6 +226,7 @@ const state: {
   currentFolder: "",
   entry: null,
   viewMode: "preview",
+  draftContent: "",
   dirty: false,
   sidebarMode: "files",
   windows: [],
@@ -255,7 +268,7 @@ function bindEvents(): void {
   elements.closeSearchButton.addEventListener("click", () => closeSearch());
   elements.railFiles.addEventListener("click", () => setSidebarMode("files"));
   elements.railSearch.addEventListener("click", () => openSearch());
-  elements.rerankerToggle.addEventListener("change", () => { void toggleReranker(); });
+  elements.settingsRerankerToggle.addEventListener("change", () => { void toggleReranker(); });
   elements.clearSearchHistoryButton.addEventListener("click", () => clearSearchHistory());
   elements.clearRecentlyClosedButton.addEventListener("click", () => clearRecentlyClosed());
   elements.fileFilter.addEventListener("input", () => {
@@ -287,14 +300,11 @@ function bindEvents(): void {
   elements.toggleFileSidebarButton.addEventListener("click", () => toggleFileSidebar());
   elements.emptySourceButton.addEventListener("click", () => openSourceDialog());
   elements.previewModeButton.addEventListener("click", () => setViewMode("preview"));
-  elements.editModeButton.addEventListener("click", () => setViewMode("edit"));
+  elements.liveModeButton.addEventListener("click", () => setViewMode("live"));
+  elements.sourceModeButton.addEventListener("click", () => setViewMode("source"));
   elements.saveEntryButton.addEventListener("click", () => { void saveEntry(); });
-  elements.entryEditor.addEventListener("input", () => {
-    state.dirty = true;
-    elements.dirtyIndicator.textContent = "未保存";
-    elements.dirtyIndicator.classList.add("dirty");
-    updateEditorCount();
-  });
+  elements.entryEditor.addEventListener("input", () => handleDraftInput(elements.entryEditor.value));
+  elements.liveEntryEditor.addEventListener("input", () => handleDraftInput(elements.liveEntryEditor.value));
   elements.documentMoreButton.addEventListener("click", () => {
     if (state.entry) toggleDetails();
     else notify("打开一篇 Markdown 后可进行文件操作。", true);
@@ -380,7 +390,7 @@ function bindEvents(): void {
       setSidebarMode("files");
       elements.fileFilter.focus();
     }
-    if ((event.metaKey || event.ctrlKey) && key === "s" && state.viewMode === "edit") {
+    if ((event.metaKey || event.ctrlKey) && key === "s" && state.entry && state.dirty) {
       event.preventDefault();
       void saveEntry();
     }
@@ -525,6 +535,7 @@ async function selectSource(source: ApiSource): Promise<void> {
   state.filter = "";
   elements.fileFilter.value = "";
   state.entry = null;
+  state.draftContent = "";
   state.activeWindowId = undefined;
   state.detailsOpen = false;
   state.viewMode = "preview";
@@ -563,6 +574,7 @@ async function openEntry(path: string, sourceId = state.selectedSource?.id, skip
   const source = state.sources.find((candidate) => candidate.id === response.value?.sourceId);
   if (source) state.selectedSource = source;
   state.entry = response.value;
+  state.draftContent = response.value.content;
   removeRecentlyClosed(response.value.sourceId, response.value.relPath);
   upsertWindow(response.value);
   state.currentFolder = parentPath(response.value.relPath);
@@ -659,20 +671,21 @@ function renderSearchPanel(): void {
 }
 
 function resetSearchDisplay(): void {
-  elements.searchHeading.textContent = "搜索当前知识库";
+  elements.searchHeading.textContent = "搜索";
   elements.searchMeta.textContent = "";
   elements.searchResultList.innerHTML = "";
 }
 
 function renderSearchResults(result: ApiSearchResult, focus = false): void {
+  state.searchResult = result;
   state.searchLoading = false;
   elements.searchSubmitButton.disabled = false;
   elements.searchSubmitButton.textContent = "搜索";
   setSidebarMode("search");
   elements.searchInput.value = result.query;
   elements.searchMode.value = result.mode;
-  elements.searchHeading.textContent = `搜索“${result.query}”`;
-  elements.searchMeta.textContent = `${result.total} 个结果 · ${result.mode}`;
+  elements.searchHeading.textContent = "搜索";
+  elements.searchMeta.textContent = `“${result.query}” · ${result.total} 个结果 · ${result.mode}`;
   renderSearchHistory();
   if (result.results.length === 0) {
     elements.searchResultList.innerHTML = `<div class="search-empty">没有找到匹配的 Markdown 文件。</div>`;
@@ -755,9 +768,12 @@ function clearSearchHistory(): void {
 function renderSearchHistory(): void {
   elements.searchHistory.classList.toggle("hidden", state.searchHistory.length === 0);
   if (state.searchHistory.length === 0) {
+    elements.searchHistory.open = false;
+    elements.searchHistoryCount.textContent = "";
     elements.searchHistoryList.innerHTML = "";
     return;
   }
+  elements.searchHistoryCount.textContent = `${state.searchHistory.length}`;
   elements.searchHistoryList.innerHTML = state.searchHistory.map((item) => `
     <button class="search-history-item${item.id === state.activeSearchHistoryId ? " active" : ""}" type="button" data-search-history-id="${escapeHtml(item.id)}">
       <span>${escapeHtml(item.query)}</span>
@@ -768,10 +784,10 @@ function renderSearchHistory(): void {
       const item = state.searchHistory.find((candidate) => candidate.id === button.dataset.searchHistoryId);
       if (!item) return;
       state.activeSearchHistoryId = item.id;
-      state.searchResult = item.result;
       elements.searchInput.value = item.query;
       elements.searchMode.value = item.mode;
-      openSearch();
+      setSidebarMode("search");
+      renderSearchResults(item.result);
     });
   });
 }
@@ -902,6 +918,7 @@ async function createEntry(): Promise<void> {
   }
   elements.entryDialog.close("default");
   state.entry = response.value;
+  state.draftContent = response.value.content;
   upsertWindow(response.value);
   state.currentFolder = parentPath(response.value.relPath);
   state.viewMode = "preview";
@@ -1028,6 +1045,7 @@ async function closeWindow(id: string): Promise<void> {
   }
   const next = state.windows[index] ?? state.windows[index - 1];
   state.entry = null;
+  state.draftContent = "";
   state.viewMode = "preview";
   state.dirty = false;
   state.detailsOpen = false;
@@ -1109,6 +1127,7 @@ async function activateWindow(id: string): Promise<void> {
 function activateWorkspaceWindow(item: WorkspaceWindow): void {
   state.activeWindowId = item.id;
   state.entry = null;
+  state.draftContent = "";
   state.currentFolder = "";
   state.viewMode = "preview";
   state.dirty = false;
@@ -1173,10 +1192,10 @@ async function toggleSemanticService(): Promise<void> {
 }
 
 async function toggleReranker(): Promise<void> {
-  const enabled = elements.rerankerToggle.checked;
-  elements.rerankerToggle.disabled = true;
+  const enabled = elements.settingsRerankerToggle.checked;
+  elements.settingsRerankerToggle.disabled = true;
   const response = await client.setReranker({ enabled });
-  elements.rerankerToggle.disabled = false;
+  elements.settingsRerankerToggle.disabled = false;
   if (!response.ok) {
     renderRerankerControl();
     notify(response.error.message, true);
@@ -1192,13 +1211,14 @@ async function toggleReranker(): Promise<void> {
 function renderRerankerControl(): void {
   const reranker = state.settings?.repository.reranker ?? state.status?.reranker;
   const enabled = reranker?.enabled ?? false;
-  elements.rerankerToggle.checked = enabled;
-  elements.rerankerToggle.disabled = state.settings ? !state.settings.sourceManagement : false;
-  elements.rerankerState.textContent = reranker?.loaded
+  elements.settingsRerankerToggle.checked = enabled;
+  elements.settingsRerankerToggle.disabled = state.settings ? !state.settings.sourceManagement : false;
+  elements.settingsRerankerBadge.textContent = enabled ? "已开启" : "默认关闭";
+  elements.settingsRerankerState.textContent = reranker?.loaded
     ? `已加载 ${reranker.runtimeModel ?? reranker.model}`
     : enabled
       ? "启用后首次混合搜索时加载模型"
-      : "搜索后使用 Cross-Encoder 复核结果";
+      : "默认关闭，保持基础搜索稳定";
 }
 
 async function readStatusValue(): Promise<ApiStatus | undefined> {
@@ -1248,6 +1268,7 @@ async function removeSettingsSource(sourceId: string): Promise<void> {
   if (state.selectedSource?.id === sourceId) {
     state.selectedSource = undefined;
     state.entry = null;
+    state.draftContent = "";
     resetFileState();
   }
   await loadSources();
@@ -1288,6 +1309,7 @@ function renderSettings(): void {
   elements.settingsLlmModel.textContent = settings.llm.model || "未配置";
   elements.settingsLlmKey.textContent = settings.llm.hasKey ? "已配置（不显示）" : "未配置";
   elements.settingsLlmBadge.textContent = settings.llm.hasKey ? "已连接配置" : "未配置";
+  renderRerankerControl();
   elements.settingsSourceCount.textContent = `${settings.sources.length} 个`;
   elements.settingsSourcePath.disabled = !settings.sourceManagement;
   elements.settingsSourceForm.querySelector<HTMLButtonElement>("button[type=submit]")!.disabled = !settings.sourceManagement;
@@ -1304,39 +1326,37 @@ function renderSettings(): void {
 }
 
 function setViewMode(mode: ViewMode): void {
-  if (mode === "edit" && !state.entry) {
+  if (mode !== "preview" && !state.entry) {
     notify("请先打开一篇 Markdown 文件。", true);
     return;
   }
   state.viewMode = mode;
-  if (mode === "edit" && state.entry) {
-    elements.entryEditor.value = state.entry.content;
-    state.dirty = false;
-    updateEditorCount();
-  }
   renderWorkspace();
-  if (mode === "edit") window.setTimeout(() => elements.entryEditor.focus(), 0);
+  if (mode === "live") window.setTimeout(() => elements.liveEntryEditor.focus(), 0);
+  if (mode === "source") window.setTimeout(() => elements.entryEditor.focus(), 0);
 }
 
 async function saveEntry(): Promise<void> {
   const source = state.selectedSource;
   const entry = state.entry;
   if (!source || !entry) return;
+  const content = currentDraftContent();
   const response = await client.modifyEntry({
     source: source.id,
     relPath: entry.relPath,
-    content: elements.entryEditor.value,
+    content,
   });
   if (!response.ok) {
     notify(response.error.message, true);
     return;
   }
   state.entry = response.value;
+  state.draftContent = response.value.content;
   state.dirty = false;
   state.viewMode = "preview";
   await refreshAfterMutation();
   renderWorkspace();
-  notify("已保存 Markdown，关键词索引已更新。" );
+  notify("已保存 Markdown，关键词索引已更新，语义索引按变更 chunk 维护。" );
 }
 
 async function renameEntry(): Promise<void> {
@@ -1351,6 +1371,8 @@ async function renameEntry(): Promise<void> {
   }
   updateWindowPath(state.activeWindowId, response.value);
   state.entry = response.value;
+  state.draftContent = response.value.content;
+  state.dirty = false;
   await refreshAfterMutation();
   renderWorkspace();
   notify("文件标题已更新。" );
@@ -1368,6 +1390,8 @@ async function moveEntry(): Promise<void> {
   }
   updateWindowPath(state.activeWindowId, response.value);
   state.entry = response.value;
+  state.draftContent = response.value.content;
+  state.dirty = false;
   state.currentFolder = parentPath(response.value.relPath);
   expandFolderState(state.currentFolder);
   await refreshAfterMutation();
@@ -1389,6 +1413,7 @@ async function deleteEntry(): Promise<void> {
   removeWindow(windowKey(entry.sourceId, entry.relPath));
   state.currentFolder = parentPath(entry.relPath);
   state.entry = null;
+  state.draftContent = "";
   state.viewMode = "preview";
   state.dirty = false;
   await refreshAfterMutation();
@@ -1459,6 +1484,7 @@ function renderSourcePicker(): void {
     elements.sourceSelect.disabled = true;
     elements.sourcePopoverName.textContent = "未加载";
     elements.sourcePopoverMeta.textContent = "从设置页添加或移除 Markdown 数据源。";
+    renderBrand();
     return;
   }
   elements.sourceSelect.disabled = false;
@@ -1467,6 +1493,14 @@ function renderSourcePicker(): void {
   const selected = state.sources.find((source) => source.id === elements.sourceSelect.value) ?? state.sources[0];
   elements.sourcePopoverName.textContent = selected.name;
   elements.sourcePopoverMeta.textContent = `${selected.fileCount.toLocaleString()} 个 Markdown 文件 · ${selected.id}`;
+  renderBrand(selected);
+}
+
+function renderBrand(source = state.selectedSource): void {
+  const repositoryName = source?.name?.trim() || "知识库";
+  elements.brandRepositoryName.textContent = repositoryName;
+  elements.brandProductName.textContent = "pwiki";
+  document.title = `${repositoryName} · pwiki`;
 }
 
 function renderFileTree(): void {
@@ -1554,42 +1588,53 @@ function renderBreadcrumb(): void {
 
 function renderDocumentActions(): void {
   elements.previewModeButton.classList.toggle("active", state.viewMode === "preview");
-  elements.editModeButton.classList.toggle("active", state.viewMode === "edit");
-  elements.saveEntryButton.classList.toggle("hidden", state.viewMode !== "edit");
+  elements.liveModeButton.classList.toggle("active", state.viewMode === "live");
+  elements.sourceModeButton.classList.toggle("active", state.viewMode === "source");
+  elements.saveEntryButton.classList.toggle("hidden", !state.entry || (!state.dirty && state.viewMode === "preview"));
 }
 
 function renderEntryView(): void {
   const entry = state.entry;
   const showPreview = Boolean(entry) && state.viewMode === "preview";
-  const showEditor = Boolean(entry) && state.viewMode === "edit";
+  const showLiveEditor = Boolean(entry) && state.viewMode === "live";
+  const showSourceEditor = Boolean(entry) && state.viewMode === "source";
   elements.emptyState.classList.toggle("hidden", Boolean(entry));
   elements.entryView.classList.toggle("hidden", !showPreview);
-  elements.editorView.classList.toggle("hidden", !showEditor);
+  elements.liveEditorView.classList.toggle("hidden", !showLiveEditor);
+  elements.editorView.classList.toggle("hidden", !showSourceEditor);
   if (!entry) {
     return;
   }
+  const content = currentDraftContent();
   elements.entryPath.textContent = `${state.selectedSource?.name ?? entry.sourceId} / ${entry.relPath}`;
   elements.entryTitle.textContent = entry.title;
   const tags = entry.tags.filter(Boolean);
   elements.entryTags.innerHTML = tags.length
     ? tags.map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join("")
     : `<span class="muted">无标签</span>`;
-  elements.entryMeta.textContent = entry.truncated ? "内容已截断" : `${entry.content.length.toLocaleString()} 字符`;
-  elements.markdownView.innerHTML = renderMarkdown(entry.content);
+  elements.entryMeta.textContent = entry.truncated ? "内容已截断" : `${content.length.toLocaleString()} 字符`;
+  elements.markdownView.innerHTML = renderMarkdown(content);
   elements.editorPath.textContent = `${state.selectedSource?.name ?? entry.sourceId} / ${entry.relPath}`;
-  if (showEditor && elements.entryEditor.value === "") elements.entryEditor.value = entry.content;
-  elements.dirtyIndicator.textContent = state.dirty ? "未保存" : "已加载";
-  elements.dirtyIndicator.classList.toggle("dirty", state.dirty);
+  elements.liveEditorPath.textContent = `${state.selectedSource?.name ?? entry.sourceId} / ${entry.relPath}`;
+  elements.entryEditor.value = content;
+  elements.liveEntryEditor.value = content;
+  elements.liveMarkdownView.innerHTML = renderMarkdown(content);
+  for (const indicator of [elements.dirtyIndicator, elements.liveDirtyIndicator]) {
+    indicator.textContent = state.dirty ? "未保存" : "已加载";
+    indicator.classList.toggle("dirty", state.dirty);
+  }
 }
 
 function renderOutline(): void {
-  const headings = state.entry ? extractHeadings(state.entry.content) : [];
+  const headings = state.entry ? extractHeadings(currentDraftContent()) : [];
   elements.outlineList.innerHTML = headings.map((heading) => `<button class="outline-item level-${heading.level}" type="button" data-heading-id="${escapeHtml(heading.id)}"><span>${escapeHtml(heading.text)}</span><small>${heading.line}</small></button>`).join("");
   elements.outlineEmpty.classList.toggle("hidden", headings.length > 0);
   elements.outlineList.classList.toggle("hidden", headings.length === 0);
   elements.outlineList.querySelectorAll<HTMLButtonElement>("[data-heading-id]").forEach((button) => {
     button.addEventListener("click", () => {
-      document.getElementById(button.dataset.headingId ?? "")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      const container = state.viewMode === "live" ? elements.liveMarkdownView : elements.markdownView;
+      const target = document.getElementById(button.dataset.headingId ?? "");
+      if (target && container.contains(target)) target.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
 }
@@ -1646,12 +1691,36 @@ function setConnectionState(ready: boolean, label: string): void {
   if (text) text.textContent = label;
 }
 
+function currentDraftContent(): string {
+  return state.entry ? state.draftContent : "";
+}
+
+function handleDraftInput(content: string): void {
+  if (!state.entry) return;
+  state.draftContent = content;
+  state.dirty = content !== state.entry.content;
+  for (const indicator of [elements.dirtyIndicator, elements.liveDirtyIndicator]) {
+    indicator.textContent = state.dirty ? "未保存" : "已加载";
+    indicator.classList.toggle("dirty", state.dirty);
+  }
+  updateEditorCount();
+  renderLivePreview();
+  renderOutline();
+  renderDocumentActions();
+}
+
+function renderLivePreview(): void {
+  elements.liveMarkdownView.innerHTML = renderMarkdown(currentDraftContent());
+}
+
 function updateEditorCount(): void {
-  elements.editorCount.textContent = `${elements.entryEditor.value.length.toLocaleString()} 字符`;
+  const count = currentDraftContent().length.toLocaleString();
+  elements.editorCount.textContent = `${count} 字符`;
+  elements.liveEditorCount.textContent = `${count} 字符`;
 }
 
 function updateEditorCountIfVisible(): void {
-  if (state.viewMode === "edit") updateEditorCount();
+  if (state.viewMode !== "preview") updateEditorCount();
 }
 
 function notify(message: string, error = false): void {

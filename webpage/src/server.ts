@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { createReadStream, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, extname, relative, resolve } from "node:path";

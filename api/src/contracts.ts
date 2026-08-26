@@ -14,7 +14,7 @@ export interface ApiError {
   details?: Record<string, unknown>;
 }
 
-/** Keep an explicit success/error shape at the HTTP boundary. */
+/** Keep the same explicit success/error shape used by the DSH RPC adapter. */
 export type ApiEnvelope<T> =
   | { ok: true; value: T; requestId?: string }
   | { ok: false; error: ApiError; requestId?: string };

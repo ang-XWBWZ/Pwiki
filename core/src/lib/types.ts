@@ -62,6 +62,8 @@ export interface FileEntry {
 export interface ChunkInfo {
   heading: string;
   level: number;
+  /** 生成 embedding 时使用的文本 hash；旧向量没有该字段时会安全地重算一次。 */
+  contentMd5?: string;
   topic?: string;
   summary?: string;
   concepts?: string[];

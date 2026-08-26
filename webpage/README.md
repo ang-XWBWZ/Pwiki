@@ -11,6 +11,31 @@ Pwiki/webpage    浏览器页面、页面状态和 HTTP client
 页面层只能通过 `/api/v1` 访问知识库。它不应把 `@llangtop/pwiki-core` 打进浏览器
 bundle，也不应启动 CLI 或 MCP 子进程。
 
+作为 Node 项目依赖安装：
+
+```bash
+npm install @llangtop/pwiki-webpage @llangtop/pwiki-api @llangtop/pwiki-core
+```
+
+发布包只包含构建后的 `dist` 和本说明文件；其中 `dist/index.html` 与 `dist/styles.css`
+由构建流程复制到发布目录。
+安装后可直接使用包声明的页面服务命令：
+
+```bash
+npm install -g @llangtop/pwiki-webpage
+pwiki-webpage --base-path /absolute/path/to/wiki-home --allow-source-management
+```
+
+如果使用当前 monorepo 的本地工作区，可以使用根工作区声明的快捷命令；参数会继续传给
+页面服务：
+
+```bash
+npm run webpage
+npm run webpage -- --base-path /absolute/path/to/wiki-home --allow-source-management
+```
+
+也可以通过下面的 `npm run start -w` 启动。
+
 当前页面服务由两个显式边界组成：
 
 - `PwikiApiClient`：浏览器安全的 HTTP client；
@@ -34,7 +59,7 @@ bundle，也不应启动 CLI 或 MCP 子进程。
 - source 列表和 source 内可展开的 Markdown 文件树；
 - keyword / semantic / hybrid 搜索结果；
 - 搜索历史：离开搜索页后保留当前查询和结果，刷新后恢复最近 8 条历史；
-- 安全转义的 Markdown 阅读器和源码编辑器；
+- 安全转义的 Markdown 阅读器，以及共享草稿的预览式编辑和源码模式；
 - 创建、覆盖保存、重命名、移动、删除、刷新、加载和卸载 source；
 - 右侧 Markdown 大纲和文件属性操作区；
 - 顶部窗口管理：已打开/未打开页面、窗口压缩/堆叠和独立的新建工作区；
@@ -42,7 +67,9 @@ bundle，也不应启动 CLI 或 MCP 子进程。
 - 夜幕紫、纸张米白、海湾蓝、松林绿、玫瑰粉、琥珀橙六套配色、响应式布局和快捷键。
 
 页面保存、移动、重命名和删除后会重新读取条目、文件树和状态；API 响应保留
-BM25/向量维护的状态边界。Markdown 渲染只允许受限的安全链接，不把原始 HTML
+BM25/向量维护的状态边界。编辑器的阅读、预览式编辑和源码模式共享同一份未保存草稿，
+切换模式不会丢失内容；保存后 core 仍按文件更新 BM25，并按 embedding 内容 hash
+复用未变化的 AST chunk。Markdown 渲染只允许受限的安全链接，不把原始 HTML
 直接插入页面。
 
 搜索历史和最近关闭文件只写入浏览器 `localStorage`，不写入知识库文件；重新打开条目

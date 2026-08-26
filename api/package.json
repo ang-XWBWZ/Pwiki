@@ -1,10 +1,13 @@
 {
   "name": "@llangtop/pwiki-api",
-  "version": "1.3.2",
-  "private": true,
+  "version": "1.3.4",
+  "files": ["dist", "README.md"],
   "description": "HTTP API adapter for the Pwiki knowledge engine",
   "type": "module",
   "main": "./dist/index.js",
+  "bin": {
+    "pwiki-api": "./dist/server.js"
+  },
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
@@ -13,7 +16,7 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --build --force",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit"
   },

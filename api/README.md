@@ -5,7 +5,7 @@
 - 面向浏览器的 HTTP API；
 - 搜索、目录浏览、条目阅读和 Markdown 管理所需的 JSON 接口；
 - 复用 `@llangtop/pwiki-core` 的索引、BM25、语义和 CRUD 语义；
-- 与 CLI、MCP 客户端共享稳定的 source ID、源内相对路径和状态边界。
+- 与 CLI、MCP、DSH 客户端共享稳定的 source ID、源内相对路径和状态边界。
 
 API 服务已经实现为显式启动的 Node HTTP 适配器。导入 `Pwiki/api`、构建项目或创建
 `PwikiApiService` 都不会监听端口；只有调用 `startPwikiApi()`，或执行 API 包的
@@ -37,7 +37,7 @@ API 端不应：
   `source-relative relPath`；
 - 把后台 embedding 已入队等同于向量已完成。状态和搜索响应需要保留这一边界。
 
-`src/contracts.ts` 使用明确的 DTO 方向：明确的
+`src/contracts.ts` 先复用 DSH 适配器已经验证过的 DTO 方向：明确的
 `{ ok, value | error }` envelope、source scope、分页、内容截断标记和后台向量状态。
 
 ## HTTP API 草案
@@ -78,8 +78,9 @@ API 端不应：
 5. 编辑态显式显示未保存、保存成功、BM25 已更新、向量排队/失败状态；
 6. 加载、卸载、刷新、覆盖保存等持久化操作必须有明确的确认和结果回读。
 
-优先完成真实 API 回读，再做视觉细节。页面层使用 generation 防竞态、
-source-relative 面包屑和内容截断标记管理状态，但不依赖额外的运行时插件。
+优先完成真实 API 回读，再做视觉细节。`pwiki-dsh` 的 `PwikiBrowserController`、
+generation 防竞态、source-relative 面包屑和内容截断标记可以作为状态管理参考，
+但 Web 页面不应依赖 DSH runtime。
 
 ## 开发与验证顺序
 
@@ -89,7 +90,29 @@ source-relative 面包屑和内容截断标记管理状态，但不依赖额外�
 4. 最后接页面，并用浏览器动作验证搜索、打开、保存、刷新和重启后的持久性；
 5. 只有当 API、文件内容、索引状态和重启后读取都通过，才把功能称为完成。
 
-当前 API 包是 private workspace package，暂不加入 Pwiki 的三包 npm 发布脚本。
+API 包已纳入 Pwiki 的 npm 公共发布范围。安装到自己的 Node 项目：
+
+```bash
+npm install @llangtop/pwiki-api @llangtop/pwiki-core
+```
+
+发布包只包含构建后的 `dist` 和本说明文件；API 仍然不会因为导入模块而自动监听端口。
+安装后可直接使用包声明的 API 服务命令：
+
+```bash
+npm install -g @llangtop/pwiki-api
+pwiki-api --base-path /absolute/wiki-home
+```
+
+如果使用当前 monorepo 的本地工作区，可以使用根工作区声明的快捷命令；参数会继续传给
+API 服务：
+
+```bash
+npm run api
+npm run api -- --base-path /absolute/wiki-home --port 4318
+```
+
+也可以通过下面的 `npm run start -w` 启动。
 
 ## 显式启动
 

@@ -95,6 +95,14 @@ describe("BM25 index v4 SQLite", () => {
     expect(result.keywordEvidence.matchedTerms[0].fields.length).toBeGreaterThan(0);
   });
 
+  it("keeps ordinary terms searchable in a single-document source shard", () => {
+    const { entries } = fixture("single source searchable token");
+    const index = buildBm25Index([entries[0]], "single-source");
+
+    expect(index.N).toBe(1);
+    expect(searchBm25Index("searchable", index, 10)[0]?.relPath).toBe("shared.md");
+  });
+
   it("rejects v1 index and legacy unversioned stats", () => {
     fixture("shared");
     writeFileSync(bm25DocsFile(), "{}", "utf-8");
